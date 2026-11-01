@@ -47,6 +47,14 @@ impl Displayer {
         };
         self.groups[index].1.extend(lines);
     }
+    /// Every line reported, in the order reported, without the columns' blank lines.
+    pub fn all(self) -> Vec<String> {
+        let mut all = self.left;
+        all.extend(self.right);
+        all.extend(self.lines);
+        all.extend(self.groups.into_iter().flat_map(|(_, lines)| lines));
+        all
+    }
     /// `extractRenderState`: the left and right columns, then `footer` (the
     /// chart keys, shown while the overlay is open) under the left one.
     pub fn columns(self, footer: &[String]) -> (Vec<String>, Vec<String>) {
@@ -220,15 +228,61 @@ pub fn scale(
 /// `extractLines` for both columns under the overlay's pose: each line's
 /// background first, then the text, right-aligned in the right column.
 pub fn draw(font: &Font, columns: [&[String]; 2], scale: f32, width: i32) -> Vec<GuiDraw> {
+    // Entries colour their text with legacy codes.
+    let text = |lines: &[String]| -> Vec<Text> {
+        lines
+            .iter()
+            .map(|l| {
+                if l.contains('§') {
+                    Text::legacy(l)
+                } else {
+                    Text::literal(l.clone())
+                }
+            })
+            .collect()
+    };
+    let (left, right) = (text(columns[0]), text(columns[1]));
+    draw_with(font, [&left, &right], scale, width, STYLE)
+}
+
+/// How [`draw_with`] draws the columns: each line's background (ARGB), the text's shadow, and
+/// how far both columns are pushed out towards their side of the screen (a mod's animation).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Style {
+    pub background: u32,
+    pub shadow: bool,
+    pub offset: i32,
+}
+
+/// `extractLines`' own look.
+pub const STYLE: Style = Style {
+    background: BACKGROUND,
+    shadow: false,
+    offset: 0,
+};
+
+/// `extractLines`: each column's lines from the top, the left one from the left edge and the
+/// right one from the right edge, each non-empty line over its background, at `scale`.
+pub fn draw_with(
+    font: &Font,
+    columns: [&[Text]; 2],
+    scale: f32,
+    width: i32,
+    style: Style,
+) -> Vec<GuiDraw> {
     let mut out = vec![GuiDraw::Push(vec![PoseOp::Scale(scale, scale)])];
     for (lines, align_left) in [(columns[0], true), (columns[1], false)] {
-        let placed: Vec<(&String, i32, i32, i32)> = lines
+        let placed: Vec<(&Text, i32, i32, i32)> = lines
             .iter()
             .enumerate()
-            .filter(|(_, l)| !l.is_empty())
-            .map(|(i, l)| {
-                let w = font.width(l) as i32;
-                let left = if align_left { 2 } else { width - 2 - w };
+            .map(|(i, l)| (i, l, font.width_text(l) as i32))
+            .filter(|(_, _, w)| *w > 0)
+            .map(|(i, l, w)| {
+                let left = if align_left {
+                    2 - style.offset
+                } else {
+                    width - 2 - w + style.offset
+                };
                 (l, left, 2 + LINE_HEIGHT * i as i32, w)
             })
             .collect();
@@ -238,21 +292,16 @@ pub fn draw(font: &Font, columns: [&[String]; 2], scale: f32, width: i32) -> Vec
                 top - 1,
                 left + w + 1,
                 top + LINE_HEIGHT - 1,
-                BACKGROUND,
+                style.background,
             ));
         }
         for (line, left, top, _) in placed {
             out.push(GuiDraw::Text {
-                // Entries colour their text with legacy codes.
-                text: if line.contains('§') {
-                    Text::legacy(line)
-                } else {
-                    Text::literal(line.clone())
-                },
+                text: line.clone(),
                 x: left,
                 y: top,
                 color: TEXT,
-                shadow: false,
+                shadow: style.shadow,
             });
         }
     }

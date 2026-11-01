@@ -291,12 +291,7 @@ impl Game<'_> {
     pub(super) fn draw_debug_overlay_under(&self, batch: &mut HudBatch, size: [u32; 2]) {
         let screen_open = self.screen != Screen::Playing;
         let reduced = self.reduced_debug_info();
-        if self.title.is_some()
-            || !self.debug_entries.any_enabled(self.debug, reduced)
-            || (self.ui.hide_gui && !screen_open)
-        {
-            return;
-        }
+        let shown = self.title.is_none() && !(self.ui.hide_gui && !screen_open);
         let framebuffer = size.map(|v| v as i32);
         let (scale, [width, height]) = debug_overlay::scale(
             framebuffer,
@@ -305,17 +300,41 @@ impl Game<'_> {
             self.settings.force_unicode,
             [batch.width as i32, batch.height as i32],
         );
-        let mut d = debug_overlay::Displayer::default();
-        self.debug_entry_lines(&mut d, framebuffer);
-        // The chart keys and the charts only while the overlay is open.
-        let footer = if self.debug {
-            self.debug_chart_lines().to_vec()
-        } else {
-            Vec::new()
-        };
-        let (left, right) = d.columns(&footer);
+        // A native mod's overlay while the overlay is open, and after it closed for as long as
+        // the mod still draws it (its closing animation).
+        let mut native = None;
+        if shown && (self.debug || self.debug_mod_overlay.get().is_some()) {
+            let entries = self.debug_entries_each(framebuffer);
+            self.native_debug_overlay(self.debug, reduced, &entries, &mut native);
+        }
+        self.debug_mod_overlay
+            .set(native.as_ref().map(|o| (o.hide_sidebar, o.hide_bossbar)));
         let atlas = &self.gui.atlas;
-        let mut draws = debug_overlay::draw(&atlas.font, [&left, &right], scale, width);
+        let mut draws = if let Some(o) = native {
+            let text = o.scale.clamp(0.1, 4.0);
+            let style = debug_overlay::Style {
+                background: o.background,
+                shadow: o.shadow,
+                offset: o.offset,
+            };
+            let columns = [&o.left[..], &o.right[..]];
+            let inner = (width as f32 / text) as i32;
+            debug_overlay::draw_with(&atlas.font, columns, scale * text, inner, style)
+        } else {
+            if !shown || !self.debug_entries.any_enabled(self.debug, reduced) {
+                return;
+            }
+            let mut d = debug_overlay::Displayer::default();
+            self.debug_entry_lines(&mut d, framebuffer);
+            // The chart keys and the charts only while the overlay is open.
+            let footer = if self.debug {
+                self.debug_chart_lines().to_vec()
+            } else {
+                Vec::new()
+            };
+            let (left, right) = d.columns(&footer);
+            debug_overlay::draw(&atlas.font, [&left, &right], scale, width)
+        };
         if self.debug {
             let charts = self.debug_charts.draw(
                 &atlas.font,

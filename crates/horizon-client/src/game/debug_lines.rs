@@ -46,164 +46,193 @@ impl Game<'_> {
         paths.sort_unstable();
         let server = self.server_debug(paths.iter().any(|p| SERVER_ENTRIES.contains(p)));
         for path in paths {
-            match path {
-                "biome" => self.debug_biome_line(d),
-                "chunk_render_stats" => self.debug_chunk_render_line(d),
-                "chunk_source_stats" => self.debug_chunk_source_lines(d, server.as_ref()),
-                "day_count" => {
-                    if self.player.is_some() {
-                        d.line(format!("Day #{}", self.world.day_time.div_euclid(24000)));
-                    }
-                }
-                "entity_render_stats" => self.debug_entity_render_line(d),
-                "entity_spawn_counts" => {
-                    if let Some(line) = server.as_ref().and_then(|s| s.spawn_counts.clone()) {
-                        d.line(line);
-                    }
-                }
-                "fps" => self.debug_fps_line(d),
-                "game_version" => d.priority(format!(
-                    "Minecraft {v} ({v}/horizon)",
-                    v = horizon_client::save::VERSION_NAME
-                )),
-                "gpu_utilization" => d.line(overlay::gpu_line(self.gpu_utilization)),
-                "heightmap" => self.debug_heightmap_lines(d, server.as_ref()),
-                "light_levels" => {
-                    if let Some(feet) = self.debug_feet() {
-                        let light = self.world.light(feet[0], feet[1], feet[2]);
-                        d.group("light", [overlay::light_line(light >> 4, light & 15)]);
-                    }
-                }
-                "local_difficulty" => {
-                    if let Some(line) = server.as_ref().and_then(|s| s.difficulty.clone()) {
-                        d.line(line);
-                    }
-                }
-                "looking_at_block_state" | "looking_at_block_tags" => {
-                    let lines = self.debug_looking_at_block(path == "looking_at_block_state");
-                    d.group("looking_at_block", lines);
-                }
-                "looking_at_entity" | "looking_at_entity_tags" => {
-                    let lines = self.crosshair_entity_type().map_or_else(Vec::new, |kind| {
-                        if path == "looking_at_entity" {
-                            vec![format!("{}Targeted Entity", overlay::UNDERLINE), kind]
-                        } else {
-                            overlay::tag_lines(&self.res.mob_data().entity_tags, &kind)
-                        }
-                    });
-                    d.group("looking_at_entity", lines);
-                }
-                "looking_at_fluid_state" | "looking_at_fluid_tags" => {
-                    let lines = self.debug_looking_at_fluid(path == "looking_at_fluid_state");
-                    d.group("looking_at_fluid", lines);
-                }
-                "memory" => {
-                    if let Some(lines) = self.memory_meter.borrow_mut().lines() {
-                        d.group("memory", lines);
-                    }
-                }
-                "particle_render_stats" => d.line(format!("P: {}", self.particles.len())),
-                "player_position" | "player_section_position" => {
-                    if let Some(p) = self.player.as_ref() {
-                        let mut lines = overlay::position(
-                            [p.position.x, p.position.y, p.position.z],
-                            self.yaw,
-                            self.pitch,
-                            self.dim.id(),
-                            self.streaming.forced.len(),
-                        );
-                        let section = lines.pop().unwrap_or_default();
-                        if path == "player_position" {
-                            d.group("position", lines);
-                        } else {
-                            d.group("position", [section]);
-                        }
-                    }
-                }
-                "player_speed" => {
-                    if self.player.is_some() {
-                        let speed = self.known_player_movement();
-                        d.group(
-                            "position",
-                            [format!("Speed: {:.3} blocks/tick", speed.length())],
-                        );
-                    }
-                }
-                "post_effects" => {
-                    let effects = self.requested_post_effects();
-                    if !effects.is_empty() {
-                        d.line(format!("Post: {}", effects.join(", ")));
-                    }
-                }
-                "simple_performance_impactors" => self.debug_performance_lines(d),
-                "sound_cache" => {
-                    let (buffers, bytes) = self.audio.cache_stats();
-                    d.line(overlay::sound_cache_line(buffers, bytes));
-                }
-                "sound_mood" => {
-                    if self.player.is_some() {
-                        d.line(overlay::sound_mood_line(
-                            self.audio.engine.used_channels(),
-                            [
-                                horizon_client::sound_engine::STATIC_CHANNELS,
-                                horizon_client::sound_engine::STREAMING_CHANNELS,
-                            ],
-                            self.ambience.moodiness,
-                        ));
-                    }
-                }
-                "system_specs" => {
-                    self.debug_system_lines(d, framebuffer);
-                    // Horizon's own: the shader pack's GPU time per pass (an
-                    // empty group would move others).
-                    let pass_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
-                        overlay::shader_pass_lines(&r.shader_pass_times())
-                    });
-                    if self.debug && !pass_lines.is_empty() {
-                        d.group("shader pack", pass_lines);
-                    }
-                    // Horizon's own passes, in a group of their own.
-                    let own_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
-                        overlay::labelled_pass_lines("Horizon GPU", &r.own_pass_times())
-                    });
-                    if self.debug && !own_lines.is_empty() {
-                        d.group("Horizon passes", own_lines);
-                    }
-                }
-                "tps" => self.debug_tps_line(d),
-                // DebugEntryChunkGeneration, where the world is generated
-                // here: the window's server thread publishes its generators.
-                "chunk_generation_stats" => {
-                    if let Some(p) = self.player.as_ref() {
-                        let terrain = self
-                            .integrated
-                            .as_ref()
-                            .and_then(|server| server.terrain(self.dim.id()));
-                        // `DebugEntryChunkGeneration.display`: the feet block
-                        // decides whether the line is sampled again; otherwise
-                        // the last result is drawn.
-                        let feet = [
-                            p.position.x.floor() as i32,
-                            p.position.y.floor() as i32,
-                            p.position.z.floor() as i32,
-                        ];
-                        let dim = self.dim.id();
-                        let mut cache = self.debug_density.borrow_mut();
-                        let line = cache.line(
-                            dim,
-                            feet,
-                            terrain.map(|t| move || t.density_debug_line(feet)),
-                        );
-                        if let Some(line) = line {
-                            d.group("chunk_generation", [line.to_owned()]);
-                        }
-                    }
-                }
-                // detailed_memory: the JVM's memory pools, which Horizon
-                // has none of. The rest are renderers (debug_renderers.rs).
-                _ => {}
-            }
+            self.debug_entry_into(path, d, &server, framebuffer);
         }
+    }
+
+    /// Entry `path`'s lines, into `d` (the `DebugScreenEntry.display` of each).
+    fn debug_entry_into(
+        &self,
+        path: &str,
+        d: &mut Displayer,
+        server: &Option<ServerDebug>,
+        framebuffer: [i32; 2],
+    ) {
+        match path {
+            "biome" => self.debug_biome_line(d),
+            "chunk_render_stats" => self.debug_chunk_render_line(d),
+            "chunk_source_stats" => self.debug_chunk_source_lines(d, server.as_ref()),
+            "day_count" => {
+                if self.player.is_some() {
+                    d.line(format!("Day #{}", self.world.day_time.div_euclid(24000)));
+                }
+            }
+            "entity_render_stats" => self.debug_entity_render_line(d),
+            "entity_spawn_counts" => {
+                if let Some(line) = server.as_ref().and_then(|s| s.spawn_counts.clone()) {
+                    d.line(line);
+                }
+            }
+            "fps" => self.debug_fps_line(d),
+            "game_version" => d.priority(format!(
+                "Minecraft {v} ({v}/horizon)",
+                v = horizon_client::save::VERSION_NAME
+            )),
+            "gpu_utilization" => d.line(overlay::gpu_line(self.gpu_utilization)),
+            "heightmap" => self.debug_heightmap_lines(d, server.as_ref()),
+            "light_levels" => {
+                if let Some(feet) = self.debug_feet() {
+                    let light = self.world.light(feet[0], feet[1], feet[2]);
+                    d.group("light", [overlay::light_line(light >> 4, light & 15)]);
+                }
+            }
+            "local_difficulty" => {
+                if let Some(line) = server.as_ref().and_then(|s| s.difficulty.clone()) {
+                    d.line(line);
+                }
+            }
+            "looking_at_block_state" | "looking_at_block_tags" => {
+                let lines = self.debug_looking_at_block(path == "looking_at_block_state");
+                d.group("looking_at_block", lines);
+            }
+            "looking_at_entity" | "looking_at_entity_tags" => {
+                let lines = self.crosshair_entity_type().map_or_else(Vec::new, |kind| {
+                    if path == "looking_at_entity" {
+                        vec![format!("{}Targeted Entity", overlay::UNDERLINE), kind]
+                    } else {
+                        overlay::tag_lines(&self.res.mob_data().entity_tags, &kind)
+                    }
+                });
+                d.group("looking_at_entity", lines);
+            }
+            "looking_at_fluid_state" | "looking_at_fluid_tags" => {
+                let lines = self.debug_looking_at_fluid(path == "looking_at_fluid_state");
+                d.group("looking_at_fluid", lines);
+            }
+            "memory" => {
+                if let Some(lines) = self.memory_meter.borrow_mut().lines() {
+                    d.group("memory", lines);
+                }
+            }
+            "particle_render_stats" => d.line(format!("P: {}", self.particles.len())),
+            "player_position" | "player_section_position" => {
+                if let Some(p) = self.player.as_ref() {
+                    let mut lines = overlay::position(
+                        [p.position.x, p.position.y, p.position.z],
+                        self.yaw,
+                        self.pitch,
+                        self.dim.id(),
+                        self.streaming.forced.len(),
+                    );
+                    let section = lines.pop().unwrap_or_default();
+                    if path == "player_position" {
+                        d.group("position", lines);
+                    } else {
+                        d.group("position", [section]);
+                    }
+                }
+            }
+            "player_speed" => {
+                if self.player.is_some() {
+                    let speed = self.known_player_movement();
+                    d.group(
+                        "position",
+                        [format!("Speed: {:.3} blocks/tick", speed.length())],
+                    );
+                }
+            }
+            "post_effects" => {
+                let effects = self.requested_post_effects();
+                if !effects.is_empty() {
+                    d.line(format!("Post: {}", effects.join(", ")));
+                }
+            }
+            "simple_performance_impactors" => self.debug_performance_lines(d),
+            "sound_cache" => {
+                let (buffers, bytes) = self.audio.cache_stats();
+                d.line(overlay::sound_cache_line(buffers, bytes));
+            }
+            "sound_mood" => {
+                if self.player.is_some() {
+                    d.line(overlay::sound_mood_line(
+                        self.audio.engine.used_channels(),
+                        [
+                            horizon_client::sound_engine::STATIC_CHANNELS,
+                            horizon_client::sound_engine::STREAMING_CHANNELS,
+                        ],
+                        self.ambience.moodiness,
+                    ));
+                }
+            }
+            "system_specs" => {
+                self.debug_system_lines(d, framebuffer);
+                // Horizon's own: the shader pack's GPU time per pass (an
+                // empty group would move others).
+                let pass_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
+                    overlay::shader_pass_lines(&r.shader_pass_times())
+                });
+                if self.debug && !pass_lines.is_empty() {
+                    d.group("shader pack", pass_lines);
+                }
+                // Horizon's own passes, in a group of their own.
+                let own_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
+                    overlay::labelled_pass_lines("Horizon GPU", &r.own_pass_times())
+                });
+                if self.debug && !own_lines.is_empty() {
+                    d.group("Horizon passes", own_lines);
+                }
+            }
+            "tps" => self.debug_tps_line(d),
+            // DebugEntryChunkGeneration, where the world is generated
+            // here: the window's server thread publishes its generators.
+            "chunk_generation_stats" => {
+                if let Some(p) = self.player.as_ref() {
+                    let terrain = self
+                        .integrated
+                        .as_ref()
+                        .and_then(|server| server.terrain(self.dim.id()));
+                    // `DebugEntryChunkGeneration.display`: the feet block
+                    // decides whether the line is sampled again; otherwise
+                    // the last result is drawn.
+                    let feet = [
+                        p.position.x.floor() as i32,
+                        p.position.y.floor() as i32,
+                        p.position.z.floor() as i32,
+                    ];
+                    let dim = self.dim.id();
+                    let mut cache = self.debug_density.borrow_mut();
+                    let line = cache.line(
+                        dim,
+                        feet,
+                        terrain.map(|t| move || t.density_debug_line(feet)),
+                    );
+                    if let Some(line) = line {
+                        d.group("chunk_generation", [line.to_owned()]);
+                    }
+                }
+            }
+            // detailed_memory: the JVM's memory pools, which Horizon
+            // has none of. The rest are renderers (debug_renderers.rs).
+            _ => {}
+        }
+    }
+
+    /// Every entry's lines on their own, enabled or not, by identifier, for a mod that draws
+    /// the overlay its own way (`native_debug_overlay`).
+    pub(super) fn debug_entries_each(
+        &self,
+        framebuffer: [i32; 2],
+    ) -> Vec<(&'static str, Vec<String>)> {
+        let server = self.server_debug(true);
+        ENTRIES
+            .iter()
+            .map(|e| {
+                let mut d = Displayer::default();
+                self.debug_entry_into(e.path, &mut d, &server, framebuffer);
+                (e.path, d.all())
+            })
+            .filter(|(_, lines)| !lines.is_empty())
+            .collect()
     }
 
     /// The camera's feet (`Entity.blockPosition`).

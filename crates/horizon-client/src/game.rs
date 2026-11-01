@@ -2421,18 +2421,18 @@ struct Game<'a> {
     entity_spans: std::cell::RefCell<Vec<horizon_client::gfx::pack_draw::EntitySpan>>,
     /// Which entity this frame's entity vertices belong to (`Frame::entity_motion`).
     entity_motion: std::cell::RefCell<Vec<(u32, u64)>>,
-<<<<<<< HEAD
     /// Mob models posed on the GPU (`Frame::skin`, `mobs::skin`): the models stored there,
     /// and this frame's draws.
     skin_models: std::cell::RefCell<horizon_client::mobs::skin::SkinModels>,
     skin_frame: std::cell::RefCell<horizon_client::gfx::entity_skin::SkinFrame>,
-=======
     /// The slot whose tooltip a native mod's preview locked in place (`NativeTooltipItems::lock`),
     /// with the tooltip's position then: it stays the hovered slot until the lock lets go.
     tooltip_lock: std::cell::Cell<Option<(usize, f32, f32)>>,
     /// The slot of the stack whose tooltip is being built, for `native_tooltip_items`.
     tooltip_slot: std::cell::Cell<Option<usize>>,
->>>>>>> b95fc3455 (Native hooks 85: a tooltip's items drawn as ShulkerBoxTooltip draws them)
+    /// Whether a native mod drew the F3 overlay last frame (`native_debug_overlay`), with
+    /// whether it hides the sidebar and the boss bars.
+    debug_mod_overlay: std::cell::Cell<Option<(bool, bool)>>,
     /// The glowing entities' silhouettes this frame (game/glowing.rs).
     glowing_vertices: std::cell::RefCell<Vec<Vertex>>,
     /// The shader pack's entity and block entity ids, while one draws entities.
@@ -8218,7 +8218,9 @@ impl Game<'_> {
             });
             // Hud: the action bar and titles draw over the hotbar (nextStratum).
             self.gui_layer("minecraft:boss_overlay", &mut batch, |g, batch| {
-                g.draw_boss_bars(batch);
+                if !g.debug_mod_overlay.get().is_some_and(|o| o.1) {
+                    g.draw_boss_bars(batch);
+                }
             });
             self.draw_extras(&mut batch);
         }
@@ -8369,7 +8371,9 @@ impl Game<'_> {
                 g.draw_title(batch);
             });
             self.gui_layer("minecraft:scoreboard_sidebar", &mut batch, |g, batch| {
-                g.draw_scoreboard(batch);
+                if !g.debug_mod_overlay.get().is_some_and(|o| o.0) {
+                    g.draw_scoreboard(batch);
+                }
             });
             self.gui_layer("minecraft:subtitle_overlay", &mut batch, |g, batch| {
                 g.draw_subtitles(batch);
@@ -18415,13 +18419,11 @@ impl<'a> Game<'a> {
             shadow_only_vertices: Default::default(),
             entity_spans: Default::default(),
             entity_motion: Default::default(),
-<<<<<<< HEAD
             skin_models: Default::default(),
             skin_frame: Default::default(),
-=======
             tooltip_lock: Default::default(),
             tooltip_slot: Default::default(),
->>>>>>> b95fc3455 (Native hooks 85: a tooltip's items drawn as ShulkerBoxTooltip draws them)
+            debug_mod_overlay: Default::default(),
             glowing_vertices: Default::default(),
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
