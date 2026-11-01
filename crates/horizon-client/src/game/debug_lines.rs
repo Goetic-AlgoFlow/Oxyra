@@ -75,7 +75,7 @@ impl Game<'_> {
             }
             "fps" => self.debug_fps_line(d),
             "game_version" => d.priority(format!(
-                "Minecraft {v} ({v}/horizon)",
+                "Minecraft {v} ({v}/oxyra)",
                 v = horizon_client::save::VERSION_NAME
             )),
             "gpu_utilization" => d.line(overlay::gpu_line(self.gpu_utilization)),
@@ -176,10 +176,10 @@ impl Game<'_> {
                 }
                 // Horizon's own passes, in a group of their own.
                 let own_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
-                    overlay::labelled_pass_lines("Horizon GPU", &r.own_pass_times())
+                    overlay::labelled_pass_lines("Oxyra GPU", &r.own_pass_times())
                 });
                 if self.debug && !own_lines.is_empty() {
-                    d.group("Horizon passes", own_lines);
+                    d.group("Oxyra passes", own_lines);
                 }
             }
             "tps" => self.debug_tps_line(d),
