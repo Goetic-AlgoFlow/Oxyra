@@ -270,6 +270,15 @@ fn register_menu_types(mods: &[horizon_client::mod_content::ContentMod]) {
     }
 }
 
+impl Game<'_> {
+    /// The label of the button into Options > Mods a native mod asks for (`native_mods_button`).
+    pub(super) fn mods_button(&self) -> Option<String> {
+        let mut label = None;
+        self.native_mods_button(self.settings.mods.installed.len(), &mut label);
+        label
+    }
+}
+
 /// What the launcher writes beside a game it built with native mods: their ids under `mods`.
 const BUILD_INFO: &str = "native-mods.json";
 

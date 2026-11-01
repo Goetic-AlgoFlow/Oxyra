@@ -8105,6 +8105,10 @@ impl Game<'_> {
                 self.say_system_queued(&found);
             }
         }
+        let mods_button = self.mods_button();
+        if let Some(title) = self.title.as_mut() {
+            title.mods_button = mods_button;
+        }
         if self.title.is_some() {
             // TitleScreen.extractRenderState, then ToastManager over it: vanilla
             // draws the toast manager on every screen, so a pack download or a
@@ -11677,6 +11681,7 @@ impl Game<'_> {
             Action::Quit if self.options.split_guest => {}
             Action::Quit => event_loop.exit(),
             Action::Options => self.open_options(true),
+            Action::Mods => self.open_options_at(true, horizon_client::options_ui::Page::Mods),
             Action::Accessibility => {
                 self.open_options_at(true, horizon_client::options_ui::Page::Accessibility)
             }

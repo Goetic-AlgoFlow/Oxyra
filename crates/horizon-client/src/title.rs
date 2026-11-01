@@ -393,9 +393,13 @@ pub enum Action {
         dir: PathBuf,
         selected: Vec<String>,
     },
+    /// The Mods button a native mod added (`Title::mods_button`): Options > Mods.
+    Mods,
 }
 pub struct Title {
     pub mode: Mode,
+    /// The label of the Mods button a native mod asks for: it shares Realms' row.
+    pub mods_button: Option<String>,
     /// Direct Connection's address, synchronized with `options.txt`'s `lastServer`.
     pub last_server: String,
     /// `skipMultiplayerWarning`, synchronized with `options.txt` the same way.
@@ -755,6 +759,7 @@ impl Title {
         let now = std::time::Instant::now();
         Self {
             mode,
+            mods_button: None,
             last_server: String::new(),
             skip_multiplayer_warning: false,
             saves,
@@ -1712,14 +1717,24 @@ impl Title {
                         self.allows_multiplayer,
                         4,
                     ),
-                    b(
-                        cx - 100.0,
-                        y + 48.0,
-                        200.0,
-                        &lang::get_or("menu.online", "Minecraft Realms"),
-                        false,
-                        0,
-                    ),
+                    match &self.mods_button {
+                        Some(_) => b(
+                            cx + 2.0,
+                            y + 48.0,
+                            98.0,
+                            &lang::get_or("menu.online", "Minecraft Realms"),
+                            false,
+                            0,
+                        ),
+                        None => b(
+                            cx - 100.0,
+                            y + 48.0,
+                            200.0,
+                            &lang::get_or("menu.online", "Minecraft Realms"),
+                            false,
+                            0,
+                        ),
+                    },
                     b(
                         cx - 100.0,
                         y + 96.0,
@@ -1737,6 +1752,9 @@ impl Title {
                         2,
                     ),
                 ];
+                if let Some(label) = &self.mods_button {
+                    buttons.push(b(cx - 100.0, y + 48.0, 98.0, label, true, 8));
+                }
                 // CommonButtons' icon buttons; Horizon's Join a Friend (an
                 // invite code) sits behind vanilla's Friends button.
                 for (i, (key, plain, id, icon)) in [
@@ -3432,6 +3450,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 Action::None
             }
             (Mode::Main, Some(3)) => Action::Options,
+            (Mode::Main, Some(8)) => Action::Mods,
             (Mode::Main, Some(7)) => Action::Accessibility,
             (Mode::Main, Some(6)) => Action::Language,
             (Mode::Select { worlds, selected }, Some(10)) => {
@@ -4611,6 +4630,30 @@ mod classic_tests {
             title.focused_button.is_some(),
             "the next Tab reaches the buttons"
         );
+    }
+
+    #[test]
+    fn a_mods_button_shares_the_realms_row_and_opens_the_mods_page() {
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/horizon-test-resources"),
+        );
+        let row = |title: &Title| {
+            let buttons = title.buttons(427.0, 240.0);
+            let realms = buttons.iter().find(|b| b.id == 0).map(|b| (b.x, b.w));
+            let mods = buttons.iter().find(|b| b.id == 8).map(|b| (b.x, b.w));
+            (realms, mods)
+        };
+        assert_eq!(row(&title), (Some((113.0, 200.0)), None));
+        title.mods_button = Some("Mods (3)".into());
+        assert_eq!(row(&title), (Some((215.0, 98.0)), Some((113.0, 98.0))));
+        let mods = title
+            .buttons(427.0, 240.0)
+            .into_iter()
+            .find(|b| b.id == 8)
+            .unwrap();
+        let (action, _) = title.click(mods.x + 1.0, mods.y + 1.0, (427.0, 240.0));
+        assert!(matches!(action, Action::Mods));
     }
 
     #[test]
