@@ -401,6 +401,7 @@ impl Game<'_> {
                 }
                 Event::NativeSettings(i) => self.native_settings_refresh(i),
                 Event::NativeButton(i, b) => self.native_settings_event(i, b),
+                Event::NativeText(i, b, text) => self.native_settings_text_event(i, b, &text),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
                 Event::Narrator => self.narrator_status_changed(),
             }

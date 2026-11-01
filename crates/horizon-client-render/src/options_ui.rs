@@ -1304,6 +1304,8 @@ enum Act {
     /// A native mod's key (mod, key) waits for a key; a button of its page.
     NativeKey(usize, usize),
     NativeButton(usize, usize),
+    /// A text field of a native mod's page (`caption\u{1}value`) takes the keys.
+    NativeField(usize, usize),
     OpenModFolder,
     /// Credits & Attribution's Credits button (WinScreen without the poem).
     Credits,
@@ -1435,6 +1437,9 @@ pub enum Event {
     /// Button `.1` of native mod `.0`'s page was pressed: the game tells the
     /// mod and refreshes the page.
     NativeButton(usize, usize),
+    /// Text field `.1` of native mod `.0`'s page was confirmed with `.2`: the
+    /// game tells the mod and refreshes the page.
+    NativeText(usize, usize, String),
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,
     /// Copy how an agent connects (the AI Agent page).
@@ -1484,6 +1489,8 @@ pub struct OptionsUi {
     pub selected_key: Option<&'static str>,
     /// The native mod's key waiting: (mod, key) in `mods.installed`.
     selected_native_key: Option<(usize, usize)>,
+    /// A native mod's text field being typed in: (mod, button, text so far).
+    native_text: Option<(usize, usize, String)>,
     /// Controller Binds: the action waiting for a pad button.
     pub selected_pad_action: Option<&'static str>,
     /// The glyphs the binds list shows (the setting, else the pad's family).
@@ -1562,6 +1569,7 @@ impl Default for OptionsUi {
             scrollbar_drag_y: None,
             selected_key: None,
             selected_native_key: None,
+            native_text: None,
             selected_pad_action: None,
             pad_style: GlyphStyle::Xbox,
             languages: Vec::new(),
@@ -2122,6 +2130,7 @@ impl OptionsUi {
     }
     fn push(&mut self, page: Page) {
         self.stack.push(page);
+        self.native_text = None;
         self.scroll = 0.0;
         self.scrollbar_drag_y = None;
         self.focus = None;
@@ -2294,6 +2303,43 @@ impl OptionsUi {
             rows.push(Row::Buttons(inactive(caption), Some(change)));
         }
         for (b, label) in page.buttons.iter().enumerate() {
+            // A heading (`\u{2}text`), a text field (`caption\u{1}value`), else a button.
+            if let Some(heading) = label.strip_prefix('\u{2}') {
+                rows.push(Row::Note(heading.to_owned()));
+                continue;
+            }
+            if let Some((caption, value)) = label.split_once('\u{1}') {
+                let editing = self
+                    .native_text
+                    .as_ref()
+                    .filter(|t| (t.0, t.1) == (i, b))
+                    .map(|t| t.2.as_str());
+                let shown = editing.unwrap_or(value);
+                // A colour (`#rrggbb`) shows a square of itself first.
+                let mut message = match shown
+                    .strip_prefix('#')
+                    .filter(|h| h.len() == 6)
+                    .and_then(|h| u32::from_str_radix(h, 16).ok())
+                {
+                    Some(rgb) => Text::literal("\u{25a0} ").with_color(rgb),
+                    None => Text::literal(""),
+                };
+                message = match editing {
+                    Some(text) => message
+                        .append(Text::literal(format!("> {text}_ <")).with_color(text::YELLOW)),
+                    None => message.append(Text::literal(value.to_owned())),
+                };
+                let caption = button(
+                    0.0,
+                    0.0,
+                    150.0,
+                    Text::literal(caption.to_owned()),
+                    Act::None,
+                );
+                let field = button(0.0, 0.0, 150.0, message, Act::NativeField(i, b));
+                rows.push(Row::Buttons(inactive(caption), Some(field)));
+                continue;
+            }
             let widget = button(
                 0.0,
                 0.0,
@@ -2304,6 +2350,16 @@ impl OptionsUi {
             rows.push(Row::Buttons(widget, None));
         }
         rows
+    }
+    /// The value of text field `b` of native mod `i`'s page.
+    fn native_field_value(s: &Settings, i: usize, b: usize) -> String {
+        s.mods
+            .installed
+            .get(i)
+            .and_then(|m| m.native.as_ref())
+            .and_then(|page| page.buttons.get(b))
+            .and_then(|label| label.split_once('\u{1}'))
+            .map_or_else(String::new, |(_, value)| value.to_owned())
     }
 
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
@@ -3751,6 +3807,9 @@ impl OptionsUi {
                 }
             };
         }
+        if !drag {
+            self.native_text = None;
+        }
         if self.page() == Page::SplitProfiles {
             use crate::split_profiles::Click;
             if right || drag {
@@ -4017,6 +4076,10 @@ impl OptionsUi {
                             self.selected_native_key = Some((i, k));
                         }
                         Act::NativeButton(i, b) => events.push(Event::NativeButton(i, b)),
+                        Act::NativeField(i, b) => {
+                            events.push(Event::ButtonClick);
+                            self.native_text = Some((i, b, Self::native_field_value(s, i, b)));
+                        }
                         Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::PickShaderPack(i) => {
                             if let Some(pack) = s.shader_packs.get(i) {
@@ -4596,6 +4659,28 @@ impl OptionsUi {
                 _ => {}
             }
         }
+        if let Some((i, b, buf)) = &mut self.native_text {
+            match key {
+                K::Escape => self.native_text = None,
+                K::Enter | K::NumpadEnter => {
+                    let (i, b, text) = (*i, *b, std::mem::take(buf));
+                    self.native_text = None;
+                    return vec![Event::NativeText(i, b, text)];
+                }
+                K::Backspace => {
+                    buf.pop();
+                }
+                _ => {
+                    let typed = text.unwrap_or_default();
+                    for c in typed.chars().filter(|c| !c.is_control()) {
+                        if buf.chars().count() < 32 {
+                            buf.push(c);
+                        }
+                    }
+                }
+            }
+            return Vec::new();
+        }
         if let Some(action) = self.selected_pad_action.take() {
             // As on Key Binds, Escape unbinds; other keys cancel.
             if key == K::Escape {
@@ -4909,6 +4994,10 @@ impl OptionsUi {
                             self.selected_native_key = Some((i, k));
                         }
                         Act::NativeButton(i, b) => events.push(Event::NativeButton(i, b)),
+                        Act::NativeField(i, b) => {
+                            events.push(Event::ButtonClick);
+                            self.native_text = Some((i, b, Self::native_field_value(s, i, b)));
+                        }
                         Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::PickShaderPack(i) => {
                             if let Some(pack) = s.shader_packs.get(i) {
@@ -5720,6 +5809,63 @@ mod tests {
         assert_eq!(key_label(&mut ui, &s).unwrap().0, "R");
         let saved = crate::mod_list::ModList::parse(&s.mods.serialize());
         assert_eq!(saved.keys_of("zoom"), vec![("zoom", "key.keyboard.r")]);
+    }
+
+    /// A native mod's text field (`caption\u{1}value`) types until Enter and hands the text
+    /// to the mod; Escape leaves it as it was; a heading (`\u{2}text`) is a note.
+    #[test]
+    fn a_native_mods_text_field_takes_typing_until_enter() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        s.mods.installed.push(crate::mod_list::Installed {
+            id: "colors".into(),
+            title: "Colors 1.0.0".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(crate::mod_list::NativePage {
+                keys: Vec::new(),
+                buttons: vec!["\u{2}Boxes".into(), "Red Box\u{1}Auto".into()],
+            }),
+        });
+        ui.show(Page::NativeMod(0));
+        assert!(matches!(&ui.native_rows(&s, 0)[1], Row::Note(n) if n == "Boxes"));
+        let field = |ui: &mut OptionsUi, s: &Settings| {
+            let (widgets, ..) = ui.layout(s, size.0, size.1);
+            widgets.into_iter().find_map(|w| match w.kind {
+                WKind::Button {
+                    label,
+                    act: Act::NativeField(0, 1),
+                    ..
+                } => Some((label.plain(), w.x, w.y)),
+                _ => None,
+            })
+        };
+        let (label, x, y) = field(&mut ui, &s).expect("the field's row");
+        assert_eq!(label, "Auto");
+        let click = |ui: &mut OptionsUi, s: &mut Settings| {
+            ui.click(s, &atlas, x + 1.0, y + 1.0, size, [480, 240], false, false)
+        };
+        click(&mut ui, &mut s);
+        assert_eq!(field(&mut ui, &s).unwrap().0, "> Auto_ <");
+        use winit::keyboard::KeyCode as K;
+        for _ in 0..4 {
+            ui.key(&mut s, &atlas, K::Backspace, None);
+        }
+        for c in ["#", "a", "b", "1", "2", "3", "4"] {
+            ui.key(&mut s, &atlas, K::KeyA, Some(c));
+        }
+        assert_eq!(field(&mut ui, &s).unwrap().0, "\u{25a0} > #ab1234_ <");
+        assert_eq!(
+            ui.key(&mut s, &atlas, K::Enter, None),
+            vec![Event::NativeText(0, 1, "#ab1234".into())]
+        );
+        click(&mut ui, &mut s);
+        ui.key(&mut s, &atlas, K::KeyA, Some("x"));
+        assert!(ui.key(&mut s, &atlas, K::Escape, None).is_empty());
+        assert_eq!(field(&mut ui, &s).unwrap().0, "Auto");
     }
 
     fn mode(width: i32, rate: f32) -> crate::window::VideoMode {
