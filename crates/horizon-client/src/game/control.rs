@@ -577,10 +577,14 @@ impl Game<'_> {
                     }
                 };
                 match arg(2)? {
-                    "down" => self.control_key_down(key)?,
+                    "down" => {
+                        self.control_key_down(key)?;
+                        self.agent_modifier(key, true);
+                    }
                     "up" => {
                         self.keys.remove(&key);
                         self.physical_keys.remove(&key);
+                        self.agent_modifier(key, false);
                     }
                     // The system's auto-repeat while the key is held.
                     "repeat" => {

@@ -891,9 +891,22 @@ impl Game<'_> {
     fn agent_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
         self.play_mouse(button, pressed)
     }
+    /// A Shift or Control the agent holds sets its modifier, as a keyboard's
+    /// does, or `heal_hold_latches` lets the key go on the next frame.
+    pub(super) fn agent_modifier(&mut self, key: KeyCode, down: bool) {
+        let modifier = match key {
+            KeyCode::ShiftLeft | KeyCode::ShiftRight => winit::keyboard::ModifiersState::SHIFT,
+            KeyCode::ControlLeft | KeyCode::ControlRight => {
+                winit::keyboard::ModifiersState::CONTROL
+            }
+            _ => return,
+        };
+        self.modifiers.set(modifier, down);
+    }
     fn release_agent_keys(&mut self) {
         for k in MOVE_KEYS {
             self.keys.remove(&k);
+            self.agent_modifier(k, false);
         }
         if self.left {
             let _ = self.agent_mouse(MouseButton::Left, false);
@@ -1149,6 +1162,7 @@ impl Game<'_> {
                 }
                 for &k in &keys {
                     self.keys.insert(k);
+                    self.agent_modifier(k, true);
                 }
                 let from = self.player.as_ref().map_or(Vec3::ZERO, |p| p.position);
                 let until = Instant::now() + Duration::from_secs_f64(seconds);
@@ -1883,6 +1897,7 @@ impl Game<'_> {
                 }
                 for &k in keys.iter() {
                     self.keys.insert(k);
+                    self.agent_modifier(k, true);
                 }
                 if Instant::now() < *until && !timed_out {
                     return None;
@@ -2080,6 +2095,7 @@ impl Game<'_> {
         self.keys.insert(KeyCode::KeyW);
         if g.sprint {
             self.keys.insert(KeyCode::ControlLeft);
+            self.agent_modifier(KeyCode::ControlLeft, true);
         }
         // Step up onto the next block, or out of water.
         let in_water = {
