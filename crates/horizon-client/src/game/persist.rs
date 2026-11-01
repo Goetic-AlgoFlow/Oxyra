@@ -520,18 +520,16 @@ impl Game<'_> {
                             self.remember(id, uuid, tag);
                         }
                     }
-                    // PrimedTnt.readAdditionalSaveData: its fuse (80 when absent) and motion.
-                    // Its Passengers ride it (EntityType.loadEntityRecursive forces them on).
+                    // PrimedTnt.readAdditionalSaveData: its fuse (80 when absent;
+                    // getShortOr takes any number, as a short) and motion.
                     "minecraft:tnt" => {
                         let mut tag = tag;
                         let riders = self.take_mob_passengers(&mut tag);
                         if let Some(position) = entity_nbt::position(&tag) {
                             self.next_entity += 1;
                             let id = self.next_entity;
-                            let fuse = match tag.get("fuse") {
-                                Some(Tag::Short(f)) => i32::from(*f),
-                                _ => 80,
-                            };
+                            let fuse = horizon_client::save::number(tag.get("fuse"))
+                                .map_or(80, |f| i32::from(f as i16));
                             self.tnts.push(super::tnt::PrimedTnt {
                                 no_gravity: entity_nbt::flag(&tag, "NoGravity"),
                                 id,
@@ -539,7 +537,8 @@ impl Game<'_> {
                                 previous: position,
                                 velocity: entity_nbt::motion(&tag),
                                 fuse,
-                                on_ground: matches!(tag.get("OnGround"), Some(Tag::Byte(1))),
+                                on_ground: horizon_client::save::number(tag.get("OnGround"))
+                                    .is_some_and(|v| v != 0),
                                 owner: None,
                                 guest: None,
                                 // PrimedTnt.readAdditionalSaveData: 4 by default,
