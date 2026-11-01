@@ -565,7 +565,7 @@ fn wordmark(atlas: &HudAtlas, batch: &mut HudBatch) {
     let small = (size * 0.25).clamp(MICRO, 18.0);
     let block = size * 1.45 + small * 0.6 + small * 1.5;
     let top = (ui.h - block) / 2.0;
-    ui.text_centered(Face::SemiBold, size, ui.w / 2.0, top, BOOT_TEXT, "Horizon");
+    ui.text_centered(Face::SemiBold, size, ui.w / 2.0, top, BOOT_TEXT, "Oxyra");
     ui.text_centered(
         Face::Mono,
         small,
