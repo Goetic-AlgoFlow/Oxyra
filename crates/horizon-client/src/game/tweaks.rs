@@ -71,9 +71,17 @@ struct Drag {
 }
 
 impl Game<'_> {
+    /// The controls and the wheel: the Extras options, or what a native mod (Mouse Tweaks)
+    /// makes of them.
+    fn mouse_tweaks(&self) -> (bool, bool) {
+        let extras = &self.settings.extras;
+        let (mut controls, mut wheel) = (extras.mouse_tweaks, extras.mouse_tweaks_wheel);
+        self.native_mouse_tweaks(&mut controls, &mut wheel);
+        (controls, wheel)
+    }
     /// The open screen is one the tweaks run in, with the extra on.
     pub(super) fn tweaks_on(&self) -> bool {
-        if !self.settings.extras.mouse_tweaks
+        if !self.mouse_tweaks().0
             || self.screen != Screen::Inventory
             || self.station.is_some()
             || self.mount_active()
@@ -227,7 +235,7 @@ impl Game<'_> {
     }
     /// The wheel over an inventory screen: true when the tweaks used it.
     pub(super) fn tweak_scroll(&mut self, delta: f32, slot: Option<usize>) -> bool {
-        if !self.settings.extras.mouse_tweaks_wheel || !self.tweaks_on() || self.carried.is_some() {
+        if !self.mouse_tweaks().1 || !self.tweaks_on() || self.carried.is_some() {
             return false;
         }
         let Some(slot) = slot else {
