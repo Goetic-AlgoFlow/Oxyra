@@ -26,6 +26,200 @@ fn tooltip_position(
 }
 
 use super::{Game, Screen};
+use super::native_hooks::{NativeTooltipItems, TooltipItemsPosition, TooltipItemsTheme};
+
+/// A tooltip grid's window: its size, slots in a row, look and place.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TooltipWindow {
+    w: f32,
+    h: f32,
+    /// The slots in a row (`BasePreviewRenderer.getMaxRowSize`).
+    row: u32,
+    theme: TooltipItemsTheme,
+    position: TooltipItemsPosition,
+}
+
+impl TooltipWindow {
+    /// `ModPreviewRenderer.getWidth`/`getHeight`: 14 pixels of frame around 18 pixel slots;
+    /// `VanillaPreviewRenderer`'s: 24 pixel slots, rows no wider than the slots.
+    fn of(grid: &NativeTooltipItems) -> Self {
+        let n = grid.slots.len().max(1) as u32;
+        let (w, h, row) = match grid.theme {
+            TooltipItemsTheme::Window => {
+                let rows = n.div_ceil(grid.columns);
+                (14 + grid.columns.min(n) * 18, 14 + rows * 18, grid.columns)
+            }
+            TooltipItemsTheme::Bundle => {
+                let row = grid.columns.min(n);
+                (row * 24, n.div_ceil(row) * 24, row)
+            }
+        };
+        Self {
+            w: w as f32,
+            h: h as f32,
+            row,
+            theme: grid.theme,
+            position: grid.position,
+        }
+    }
+    /// Where the window's top left goes for a tooltip whose content is `(x, y, w, h)`:
+    /// `PreviewClientTooltipComponent.extractImage`, then the bundle look's centring.
+    fn origin(
+        self,
+        (x, y, w, h): (f32, f32, f32, f32),
+        (mouse_x, _): (f32, f32),
+        (screen_w, screen_h): (f32, f32),
+    ) -> (f32, f32) {
+        let bundle = self.theme == TooltipItemsTheme::Bundle;
+        let (out_x, out_y) = if bundle { (0.0, 8.0) } else { (-4.0, 4.0) };
+        let auto = self.position == TooltipItemsPosition::Outside;
+        let position = match self.position {
+            TooltipItemsPosition::Outside if y + h + self.h > screen_h => {
+                TooltipItemsPosition::OutsideTop
+            }
+            TooltipItemsPosition::Outside => TooltipItemsPosition::OutsideBottom,
+            p => p,
+        };
+        let (mut px, mut py, mut view) = (x, y + 12.0, w);
+        match position {
+            TooltipItemsPosition::OutsideTop => {
+                px += out_x;
+                py = y - self.h - out_y;
+            }
+            TooltipItemsPosition::OutsideBottom => {
+                px += out_x;
+                py = y + h + out_y;
+            }
+            _ => {}
+        }
+        if position != TooltipItemsPosition::Inside && (py < 0.0 || py + self.h > screen_h) {
+            let flipped = if position == TooltipItemsPosition::OutsideBottom {
+                y - self.h - out_y
+            } else {
+                y + h + out_y
+            };
+            if auto && flipped >= 0.0 && flipped + self.h <= screen_h {
+                py = flipped;
+            } else {
+                // Beside the tooltip, on the side away from the cursor.
+                px = if x + w / 2.0 < mouse_x {
+                    (x + w + 24.0).min(screen_w - self.w)
+                } else {
+                    (x - self.w - 24.0).max(0.0)
+                };
+                py = (y + ((h - self.h) / 2.0).trunc())
+                    .min(screen_h - self.h)
+                    .max(0.0);
+                view = self.w;
+            }
+        }
+        if bundle {
+            px += ((view - self.w) / 2.0).trunc();
+        }
+        (px, py)
+    }
+}
+
+/// ShulkerBoxTooltip's window, its `shulker_box_tooltip` sprite (a nine-slice with a 7 pixel
+/// border, its 18 pixel slot repeated inside): the inventory panel's frame and slots,
+/// multiplied by `tint` (`0xRRGGBB`). `w - 14` and `h - 14` are whole slots.
+fn tooltip_window(
+    batch: &mut HudBatch,
+    atlas: &horizon_client::hud::HudAtlas,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    tint: u32,
+) {
+    let shade = |grey: u32| {
+        let c = |shift: u32| (grey * ((tint >> shift) & 0xFF) / 255) as u8;
+        rgba(c(16), c(8), c(0), 255)
+    };
+    let (k, l, p, s, d, g) = (
+        shade(0x00),
+        shade(0xFF),
+        shade(0xC6),
+        shade(0x55),
+        shade(0x37),
+        shade(0x8B),
+    );
+    let mut fill = |fx: f32, fy: f32, fw: f32, fh: f32, color| {
+        batch.fill(atlas, x + fx, y + fy, fw, fh, color);
+    };
+    // The frame, row by row as the sprite has it: a black outline, white light at the top
+    // left, dark grey shadow at the bottom right.
+    fill(2.0, 0.0, w - 5.0, 1.0, k);
+    fill(1.0, 1.0, 1.0, 1.0, k);
+    fill(2.0, 1.0, w - 5.0, 1.0, l);
+    fill(w - 3.0, 1.0, 1.0, 1.0, k);
+    fill(0.0, 2.0, 1.0, 1.0, k);
+    fill(1.0, 2.0, w - 4.0, 1.0, l);
+    fill(w - 3.0, 2.0, 1.0, 1.0, p);
+    fill(w - 2.0, 2.0, 1.0, 1.0, k);
+    fill(0.0, 3.0, 1.0, 1.0, k);
+    fill(1.0, 3.0, 3.0, 1.0, l);
+    fill(4.0, 3.0, w - 7.0, 1.0, p);
+    fill(w - 3.0, 3.0, 2.0, 1.0, s);
+    fill(w - 1.0, 3.0, 1.0, 1.0, k);
+    let mid = h - 8.0;
+    fill(0.0, 4.0, 1.0, mid, k);
+    fill(1.0, 4.0, 2.0, mid, l);
+    fill(3.0, 4.0, w - 6.0, mid, p);
+    fill(w - 3.0, 4.0, 2.0, mid, s);
+    fill(w - 1.0, 4.0, 1.0, mid, k);
+    fill(0.0, h - 4.0, 1.0, 1.0, k);
+    fill(1.0, h - 4.0, 2.0, 1.0, l);
+    fill(3.0, h - 4.0, w - 7.0, 1.0, p);
+    fill(w - 4.0, h - 4.0, 3.0, 1.0, s);
+    fill(w - 1.0, h - 4.0, 1.0, 1.0, k);
+    fill(1.0, h - 3.0, 1.0, 1.0, k);
+    fill(2.0, h - 3.0, 1.0, 1.0, p);
+    fill(3.0, h - 3.0, w - 4.0, 1.0, s);
+    fill(w - 1.0, h - 3.0, 1.0, 1.0, k);
+    fill(2.0, h - 2.0, 1.0, 1.0, k);
+    fill(3.0, h - 2.0, w - 5.0, 1.0, s);
+    fill(w - 2.0, h - 2.0, 1.0, 1.0, k);
+    fill(3.0, h - 1.0, w - 5.0, 1.0, k);
+    // The slots: dark top and left edges, white bottom and right ones.
+    let (cols, rows) = (((w - 14.0) / 18.0) as u32, ((h - 14.0) / 18.0) as u32);
+    for j in 0..rows {
+        for i in 0..cols {
+            let (sx, sy) = (7.0 + i as f32 * 18.0, 7.0 + j as f32 * 18.0);
+            fill(sx, sy, 17.0, 1.0, d);
+            fill(sx + 17.0, sy, 1.0, 1.0, g);
+            fill(sx, sy + 1.0, 1.0, 16.0, d);
+            fill(sx + 1.0, sy + 1.0, 16.0, 16.0, g);
+            fill(sx + 17.0, sy + 1.0, 1.0, 16.0, l);
+            fill(sx, sy + 17.0, 1.0, 1.0, g);
+            fill(sx + 1.0, sy + 17.0, 17.0, 1.0, l);
+        }
+    }
+}
+
+/// `ShulkerBoxTooltipUtil.abbreviateInteger`: `1.2k`, `15k`, `3.4M`.
+fn abbreviate_count(count: u32) -> String {
+    if count < 1000 {
+        return count.to_string();
+    }
+    let (integral, decimal, unit) = match count.ilog10() {
+        3 => (count / 1_000, count % 1_000 / 100, 'k'),
+        4 | 5 => (count / 1_000, 0, 'k'),
+        6 => (count / 1_000_000, count % 1_000_000 / 100_000, 'M'),
+        7 | 8 => (count / 1_000_000, 0, 'M'),
+        _ => (
+            count / 1_000_000_000,
+            count % 1_000_000_000 / 100_000_000,
+            'G',
+        ),
+    };
+    if decimal > 0 {
+        format!("{integral}.{decimal}{unit}")
+    } else {
+        format!("{integral}{unit}")
+    }
+}
+
 use horizon_client::{
     block_entity_item, brewing,
     containers::BlockEntity,
@@ -2196,7 +2390,7 @@ impl Game<'_> {
         };
         // A native mod's grid of the contents (`native_tooltip_items`) stands for these lines.
         let mut grid = None;
-        self.native_tooltip_items(stack, &mut grid);
+        self.native_tooltip_items(stack, self.tooltip_slot.get().is_some(), &mut grid);
         if display.shows("minecraft:container") && grid.is_none() {
             for text in
                 horizon_client::item_tooltip::container_lines(stack, &hover_name, &translate)
@@ -2354,7 +2548,7 @@ impl Game<'_> {
         }
         // ItemLore.addToTooltip: after the enchantments, before the attributes
         // (ItemStack.addDetailsToTooltip).
-        if display.shows("minecraft:lore") {
+        if display.shows("minecraft:lore") && !grid.as_ref().is_some_and(|g| g.hide_lore) {
             for text in horizon_client::item_tooltip::lore_texts(stack) {
                 lines.push((text, u32::MAX));
             }
@@ -2524,6 +2718,9 @@ impl Game<'_> {
         // Native mods last, once getTooltipLines has built every line; a
         // tooltip the stack hides stays hidden.
         if !nested && !lines.is_empty() {
+            if let Some(grid) = grid {
+                lines.extend(grid.lines);
+            }
             self.native_tooltip(stack, &mut lines);
         }
         lines
@@ -2684,47 +2881,93 @@ impl Game<'_> {
         y: f32,
         after_name: Vec<(horizon_client::text::Text, u32)>,
     ) {
+        // The slot whose hovered stack this is, which a native mod's preview may lock.
+        let slot = self
+            .slot_at(batch, self.cursor.0, self.cursor.1)
+            .filter(|&s| self.slot_view(s).as_ref() == Some(stack));
+        self.tooltip_slot.set(slot);
         let mut lines = self.stack_tooltip_lines(stack, false, creative);
-        if lines.is_empty() {
-            return;
-        }
-        lines.splice(1..1, after_name);
-        let lines = Self::resolved(&lines);
         // The component's height does not depend on where it is drawn, so a
         // probe at the origin gives the box its extra height.
         let probe = horizon_client::bundle::tooltip_layout(self.items(), stack, 0.0, 0.0, 96.0);
         // A native mod's grid (a shulker box's contents), when the stack is no bundle.
         let mut grid = None;
         if probe.is_none() {
-            self.native_tooltip_items(stack, &mut grid);
+            self.native_tooltip_items(stack, slot.is_some(), &mut grid);
         }
+        self.tooltip_slot.set(None);
+        if lines.is_empty() {
+            return;
+        }
+        lines.splice(1..1, after_name);
+        let lines = Self::resolved(&lines);
         let grid = grid.filter(|g| g.columns > 0 && !g.slots.is_empty());
-        let grid_size = grid.as_ref().map(|g| {
-            let rows = g.slots.len().div_ceil(g.columns as usize);
-            (g.columns as f32 * 18.0, rows as f32 * 18.0)
+        // ShulkerBoxTooltip's lock (`AbstractContainerScreenMixin.lockTooltipPosition`): while
+        // it is asked for, the tooltip stays where it was when the lock began.
+        let (x, y) = match slot {
+            Some(s) if grid.as_ref().is_some_and(|g| g.lock) => {
+                let lock = self
+                    .tooltip_lock
+                    .get()
+                    .filter(|l| l.0 == s)
+                    .unwrap_or((s, x, y));
+                self.tooltip_lock.set(Some(lock));
+                (lock.1, lock.2)
+            }
+            Some(_) => {
+                self.tooltip_lock.set(None);
+                (x, y)
+            }
+            None => (x, y),
+        };
+        let window = grid.as_ref().map(TooltipWindow::of);
+        let inside = window.filter(|w| w.position == TooltipItemsPosition::Inside);
+        // Vanilla puts a tooltip's image after the name (`list.add(1, image)`); the name's 2
+        // pixel gap counts once there are two components, though an image out of the tooltip
+        // is 0 high.
+        let image_h = window.map_or(0.0, |w| {
+            let h = inside.map_or(0.0, |_| w.h + 4.0);
+            h + if lines.len() == 1 { 2.0 } else { 0.0 }
         });
-        let bundle_extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0)
-            + grid_size.map_or(0.0, |(_, gh)| gh + 2.0);
+        let bundle_extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0);
         let mut component = None;
         self.native_tooltip_component(stack, &mut component);
         let component = tooltip_component_size(component);
-        let extra = bundle_extra + component.map_or(0.0, |size| size[1] + 2.0);
+        let after_text = bundle_extra + component.map_or(0.0, |size| size[1] + 2.0);
         let min_width = (if probe.is_some() { 96.0_f32 } else { 0.0 })
             .max(component.map_or(0.0, |size| size[0]))
-            .max(grid_size.map_or(0.0, |(gw, _)| gw));
+            .max(inside.map_or(0.0, |w| w.w));
         let atlas = &self.gui.atlas;
         let (x, y, w, h) = Self::tooltip_geometry(
             atlas,
             &lines,
             (x, y),
             (batch.width, batch.height),
-            [min_width, extra],
+            [min_width, image_h + after_text],
         );
+<<<<<<< HEAD
         self.tooltip_box(batch, Some(stack), x, y, w, h);
         let text_h = h - extra;
         Self::tooltip_text(batch, atlas, &lines, x, y);
         if let Some(grid) = &grid {
             self.draw_tooltip_items(batch, grid, x, y + text_h + 2.0);
+=======
+        Self::tooltip_box(batch, atlas, x, y, w, h);
+        let shift = inside.map_or(0.0, |w| w.h + 4.0);
+        for (i, (text, color)) in lines.iter().enumerate() {
+            let ty = if i == 0 {
+                y
+            } else {
+                y + 12.0 + shift + (i - 1) as f32 * 10.0
+            };
+            batch.text_styled(atlas, text, x, ty, *color, true);
+        }
+        let text_h = h - after_text;
+        let mut hovered = None;
+        if let (Some(grid), Some(window)) = (&grid, window) {
+            let at = window.origin((x, y, w, h), self.cursor, (batch.width, batch.height));
+            hovered = self.draw_tooltip_items(batch, grid, window, at);
+>>>>>>> b95fc3455 (Native hooks 85: a tooltip's items drawn as ShulkerBoxTooltip draws them)
         }
         if let Some(layout) =
             horizon_client::bundle::tooltip_layout(self.items(), stack, x, y + text_h + 2.0, w)
@@ -2739,6 +2982,11 @@ impl Game<'_> {
                 [x, y + text_h + bundle_extra + 2.0],
                 size,
             );
+        }
+        // `BasePreviewRenderer.drawInnerTooltip`: the hovered item's own tooltip, over it all.
+        if let Some(inner) = hovered {
+            let (cx, cy) = self.cursor;
+            self.draw_stack_tooltip_with(batch, &inner, false, cx, cy, Vec::new());
         }
     }
     /// `ClientBundleTooltip.extractSelectedItemTooltip`: the selected item's
@@ -2773,30 +3021,94 @@ impl Game<'_> {
         self.tooltip_box(batch, Some(stack), px, py, tw, 8.0);
         Self::tooltip_text(batch, atlas, &lines, px, py);
     }
-    /// A native mod's grid under a tooltip: 18 pixel squares drawn as an inventory slot (a
-    /// dark top-left edge, a light bottom-right one), each item with its count.
+    /// A native mod's grid in a tooltip (`NativeTooltipItems`), as ShulkerBoxTooltip's
+    /// `ModPreviewRenderer` (the window) or `VanillaPreviewRenderer` (bundle slots) draws its
+    /// preview, the slot under the mouse highlighted; the stack in that slot.
     fn draw_tooltip_items(
         &mut self,
         batch: &mut HudBatch,
-        grid: &super::native_hooks::NativeTooltipItems,
-        x: f32,
-        y: f32,
-    ) {
-        let columns = grid.columns as usize;
+        grid: &NativeTooltipItems,
+        window: TooltipWindow,
+        (x, y): (f32, f32),
+    ) -> Option<ItemStack> {
+        let bundle = window.theme == TooltipItemsTheme::Bundle;
+        let row = window.row as usize;
+        let (cell, offset) = if bundle { (24.0, 0.0) } else { (18.0, 8.0) };
+        if !bundle {
+            let tint = grid.tint.unwrap_or(0xFF_FFFF);
+            tooltip_window(batch, &self.gui.atlas, x, y, window.w, window.h, tint);
+        } else if window.position != TooltipItemsPosition::Inside {
+            Self::tooltip_box(batch, &self.gui.atlas, x, y, window.w, window.h);
+        }
+        // `BasePreviewRenderer.getSlotAt`.
+        let (mx, my) = (
+            self.cursor.0 - x + 1.0 - offset,
+            self.cursor.1 - y + 1.0 - offset,
+        );
+        let hovered = (mx >= 0.0 && my >= 0.0 && ((mx / cell) as usize) < row)
+            .then(|| (mx / cell) as usize + (my / cell) as usize * row);
+        let sprite = |name: &str| format!("gui/sprites/container/{name}");
         for (i, stack) in grid.slots.iter().enumerate() {
             let (sx, sy) = (
-                x + (i % columns) as f32 * 18.0,
-                y + (i / columns) as f32 * 18.0,
+                x + offset + (i % row) as f32 * cell,
+                y + offset + (i / row) as f32 * cell,
             );
-            let atlas = &self.gui.atlas;
-            batch.fill(atlas, sx, sy, 18.0, 18.0, rgba(255, 255, 255, 255));
-            batch.fill(atlas, sx, sy, 17.0, 17.0, rgba(55, 55, 55, 255));
-            let inner = grid.tint.unwrap_or(rgba(139, 139, 139, 255));
-            batch.fill(atlas, sx + 1.0, sy + 1.0, 16.0, 16.0, inner);
+            let lit = hovered == Some(i);
+            // The bundle look's slots are 24 pixel sprites; the window's highlight reaches 4
+            // pixels past its 16.
+            let (back, front, at) = if bundle {
+                let back = if lit {
+                    "bundle/slot_highlight_back"
+                } else {
+                    "bundle/slot_background"
+                };
+                (back, "bundle/slot_highlight_front", (sx, sy, sx + 4.0, sy + 4.0))
+            } else {
+                (
+                    "slot_highlight_back",
+                    "slot_highlight_front",
+                    (sx - 4.0, sy - 4.0, sx, sy),
+                )
+            };
+            if lit || bundle {
+                let atlas = &self.gui.atlas;
+                horizon_client::ui::nine_slice(
+                    batch,
+                    atlas,
+                    &sprite(back),
+                    at.0,
+                    at.1,
+                    24.0,
+                    24.0,
+                    u32::MAX,
+                );
+            }
             if let Some(stack) = stack {
-                self.draw_item(batch, stack, sx + 1.0, sy + 1.0);
+                // `BasePreviewRenderer.drawItem`: a count label of its own, as a merged stack
+                // may pass its maximum.
+                let label = match stack.count {
+                    1 => String::new(),
+                    n if grid.short_counts => abbreviate_count(n),
+                    n => n.to_string(),
+                };
+                self.draw_item_model(batch, stack, at.2, at.3);
+                self.draw_item_decorations(batch, stack, at.2, at.3, Some(label));
+            }
+            if lit {
+                let atlas = &self.gui.atlas;
+                horizon_client::ui::nine_slice(
+                    batch,
+                    atlas,
+                    &sprite(front),
+                    at.0,
+                    at.1,
+                    24.0,
+                    24.0,
+                    u32::MAX,
+                );
             }
         }
+        hovered.and_then(|i| grid.slots.get(i).cloned().flatten())
     }
     /// `ClientBundleTooltip.extractImage`: the slots, the count past them and
     /// the progress bar.
@@ -3049,6 +3361,48 @@ mod tests {
         ] {
             assert_eq!(tooltip_component_size(Some(size)), None);
         }
+    }
+    /// ShulkerBoxTooltip's counts (`abbreviateInteger`) and window sizes and places.
+    #[test]
+    fn a_tooltip_grid_is_sized_and_placed_as_shulker_box_tooltip_does() {
+        use super::{
+            NativeTooltipItems, TooltipItemsPosition as P, TooltipItemsTheme, TooltipWindow,
+            abbreviate_count,
+        };
+        for (n, s) in [
+            (999, "999"),
+            (1000, "1k"),
+            (1234, "1.2k"),
+            (15_678, "15k"),
+            (2_345_678, "2.3M"),
+            (45_000_000, "45M"),
+        ] {
+            assert_eq!(abbreviate_count(n), s);
+        }
+        let grid = |slots: usize, theme, position| NativeTooltipItems {
+            columns: 9,
+            slots: vec![None; slots],
+            theme,
+            position,
+            ..NativeTooltipItems::default()
+        };
+        // A shulker box: 9 x 3 slots in a 7 pixel frame; compact, 2 merged stacks in one row.
+        let w = TooltipWindow::of(&grid(27, TooltipItemsTheme::Window, P::Inside));
+        assert_eq!((w.w, w.h, w.row), (176.0, 68.0, 9));
+        let w = TooltipWindow::of(&grid(2, TooltipItemsTheme::Window, P::Inside));
+        assert_eq!((w.w, w.h), (50.0, 32.0));
+        // The bundle look: 24 pixel slots, a row no wider than the slots.
+        let w = TooltipWindow::of(&grid(4, TooltipItemsTheme::Bundle, P::Inside));
+        assert_eq!((w.w, w.h, w.row), (96.0, 24.0, 4));
+        // Inside, under the name; outside, under the tooltip unless the screen ends first,
+        // 4 pixels left of it.
+        let tooltip = (100.0, 50.0, 180.0, 90.0);
+        let win = TooltipWindow::of(&grid(27, TooltipItemsTheme::Window, P::Inside));
+        assert_eq!(win.origin(tooltip, (0.0, 0.0), (480.0, 270.0)), (100.0, 62.0));
+        let win = TooltipWindow::of(&grid(27, TooltipItemsTheme::Window, P::Outside));
+        assert_eq!(win.origin(tooltip, (0.0, 0.0), (480.0, 270.0)), (96.0, 144.0));
+        // No room over or under it: beside it, away from the cursor, centred on it.
+        assert_eq!(win.origin(tooltip, (0.0, 0.0), (480.0, 200.0)), (0.0, 61.0));
     }
     use super::*;
 

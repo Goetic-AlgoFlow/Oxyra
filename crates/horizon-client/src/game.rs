@@ -2421,10 +2421,18 @@ struct Game<'a> {
     entity_spans: std::cell::RefCell<Vec<horizon_client::gfx::pack_draw::EntitySpan>>,
     /// Which entity this frame's entity vertices belong to (`Frame::entity_motion`).
     entity_motion: std::cell::RefCell<Vec<(u32, u64)>>,
+<<<<<<< HEAD
     /// Mob models posed on the GPU (`Frame::skin`, `mobs::skin`): the models stored there,
     /// and this frame's draws.
     skin_models: std::cell::RefCell<horizon_client::mobs::skin::SkinModels>,
     skin_frame: std::cell::RefCell<horizon_client::gfx::entity_skin::SkinFrame>,
+=======
+    /// The slot whose tooltip a native mod's preview locked in place (`NativeTooltipItems::lock`),
+    /// with the tooltip's position then: it stays the hovered slot until the lock lets go.
+    tooltip_lock: std::cell::Cell<Option<(usize, f32, f32)>>,
+    /// The slot of the stack whose tooltip is being built, for `native_tooltip_items`.
+    tooltip_slot: std::cell::Cell<Option<usize>>,
+>>>>>>> b95fc3455 (Native hooks 85: a tooltip's items drawn as ShulkerBoxTooltip draws them)
     /// The glowing entities' silhouettes this frame (game/glowing.rs).
     glowing_vertices: std::cell::RefCell<Vec<Vertex>>,
     /// The shader pack's entity and block entity ids, while one draws entities.
@@ -8713,6 +8721,14 @@ impl Game<'_> {
     fn slot_at(&self, batch: &HudBatch, x: f32, y: f32) -> Option<usize> {
         if self.book_covers_menu(batch.width) {
             return None;
+        }
+        // A locked preview keeps its slot hovered while it is still on the screen and nothing
+        // is carried (`extras_frame` lets go of an emptied one).
+        if let Some((slot, ..)) = self.tooltip_lock.get() {
+            if self.carried.is_none() && self.slots().contains(&slot) {
+                return Some(slot);
+            }
+            self.tooltip_lock.set(None);
         }
         let (ox, oy) = self.inventory_origin(batch);
         self.slots().into_iter().find(|&i| {
@@ -18399,8 +18415,13 @@ impl<'a> Game<'a> {
             shadow_only_vertices: Default::default(),
             entity_spans: Default::default(),
             entity_motion: Default::default(),
+<<<<<<< HEAD
             skin_models: Default::default(),
             skin_frame: Default::default(),
+=======
+            tooltip_lock: Default::default(),
+            tooltip_slot: Default::default(),
+>>>>>>> b95fc3455 (Native hooks 85: a tooltip's items drawn as ShulkerBoxTooltip draws them)
             glowing_vertices: Default::default(),
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),

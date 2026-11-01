@@ -63,6 +63,12 @@ impl Game<'_> {
         self.extras.fps.record(now, elapsed.as_secs_f32() * 1000.0);
         self.native_frame(elapsed);
         self.recipes_received_now();
+        // A preview locked on a slot that has since been emptied, or left the screen, lets go.
+        if let Some((slot, ..)) = self.tooltip_lock.get()
+            && (!self.slots().contains(&slot) || self.slot_view(slot).is_none())
+        {
+            self.tooltip_lock.set(None);
+        }
     }
     /// The frame counter for mods: fps, min, 1% low.
     pub(super) fn frame_reading(&self) -> (u32, u32, u32) {
