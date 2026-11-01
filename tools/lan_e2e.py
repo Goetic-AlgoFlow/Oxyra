@@ -609,7 +609,8 @@ def check_menu_transfer(host, guest, out):
         guest.raw('key', 'e', 'tap')
         guest.raw('wait-for', 'screen', 'inventory', '--timeout', 10)
         inventory = guest('screen')
-        stale = [s for s in inventory.get('slots', []) if s.get('slot', 0) >= 300]
+        # A container's slots are 300 to 499 (500 and up are the inventory's own armour and offhand).
+        stale = [s for s in inventory.get('slots', []) if 300 <= s.get('slot', 0) < 500]
         diamonds = guest('inventory')['counts'].get('minecraft:diamond', 0)
         guest.shot(out, f'menu-transfer-{label}')
         guest.raw('key', 'esc', 'tap')
@@ -628,6 +629,8 @@ def check_menu_transfer(host, guest, out):
         wait_dimension(guest, OVERWORLD, 400)
         guest.wait(20)
         open_chest()
+        # Without keep_inventory the death drops the diamonds where the guest died (vanilla).
+        host('command', command='gamerule keep_inventory true')
         guest('command', command='kill @s')
         guest.wait(20)
         guest.raw('respawn')
@@ -635,6 +638,7 @@ def check_menu_transfer(host, guest, out):
         guest.wait(40)
         settled('respawn')
     finally:
+        host('command', command='gamerule keep_inventory false')
         back_to_game(guest)
         guest('command', command=f'execute in {OVERWORLD} run setblock {chest[0]} {chest[1]} {chest[2]} minecraft:air')
     return results
