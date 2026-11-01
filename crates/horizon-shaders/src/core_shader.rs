@@ -45,6 +45,9 @@ pub struct Glue<'a> {
     pub finish: &'a str,
     /// The expression `gl_VertexID` reads.
     pub vertex_id: &'a str,
+    /// The pipeline's own uniform blocks beside vanilla's [`BLOCKS`] (`LightmapInfo`): name and
+    /// binding in set 0.
+    pub blocks: &'a [(&'a str, u32)],
 }
 
 /// A pipeline's two stages, validated.
@@ -317,6 +320,7 @@ fn rewrite(
         if let Some(name) = block_name(line) {
             let binding = BLOCKS
                 .iter()
+                .chain(glue.blocks)
                 .find(|(block, _)| *block == name)
                 .map_or_else(|| names.other_binding(name), |(_, b)| *b);
             let tail = line[line.find("uniform").unwrap_or(0)..].trim();
@@ -554,6 +558,7 @@ mod tests {
         setup: "Position = vec3(hz_pos, 0.0); Color = hz_color; UV0 = hz_uv;",
         finish: "gl_Position.z = 0.5 * gl_Position.w;",
         vertex_id: "hz_vertex_id()",
+        blocks: &[],
     };
 
     /// 26.3's `text.vsh` and `text.fsh` in shape: `#include`, explicit locations, an extension.

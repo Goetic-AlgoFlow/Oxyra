@@ -148,6 +148,7 @@ pub mod pack_draw;
 mod pack_entities;
 mod pack_hand;
 mod pack_images;
+pub(crate) mod pack_lightmap;
 mod pack_post;
 mod pack_shadow;
 mod pack_sky;
@@ -957,6 +958,8 @@ pub struct Renderer {
     shrink_gate: ShrinkGate,
     /// Whether `lightmap` holds `lightmap_pixels` yet.
     lightmap_uploaded: bool,
+    /// A resource pack's `core/lightmap` shader, which draws the lightmap instead.
+    pack_lightmap: Option<pack_lightmap::PackLightmap>,
     sprite_minimum_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
@@ -2660,7 +2663,10 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            // A pack's lightmap shader renders into it.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let lightmap_view = lightmap.create_view(&Default::default());
@@ -4031,6 +4037,7 @@ impl Renderer {
             section_copy_bytes: 0,
             shrink_gate: ShrinkGate::default(),
             lightmap_uploaded: false,
+            pack_lightmap: None,
             sprite_minimum_size,
             indices,
             index_quads,
@@ -5705,6 +5712,14 @@ impl Renderer {
             &self.emission_stats.view,
         );
     }
+    /// Draw the lightmap with a resource pack's `core/lightmap` shader (`HudAtlas::lightmap_shader`),
+    /// or compute it natively.
+    pub fn set_lightmap_shader(&mut self, program: Option<&horizon_shaders::CoreProgram>) {
+        self.pack_lightmap = program.and_then(|program| {
+            pack_lightmap::PackLightmap::new(&self.device, wgpu::TextureFormat::Rgba8Unorm, program)
+        });
+        self.lightmap_uploaded = false;
+    }
     /// The Mipmap Levels option: block textures sample at most `levels`
     /// reduced copies (0: none).
     pub fn set_mipmap_levels(&mut self, levels: u32) {
@@ -5758,6 +5773,26 @@ impl Renderer {
         flicker: f32,
         boss_darken: f32,
     ) {
+        if !self.fullbright
+            && let Some(pack) = &self.pack_lightmap
+        {
+            let info = pack_lightmap::Info {
+                sky_factor: sky.sky_light_factor,
+                block_factor: 1.4 + flicker,
+                night_vision_factor: night_vision,
+                darkness_scale: darkness,
+                boss_darkening: boss_darken,
+                brightness: gamma,
+                block_light_tint: sky.block_light_tint,
+                sky_light_color: sky.sky_light_color,
+                ambient_color: sky.ambient_light_color,
+                night_vision_color: [0.6; 3],
+            };
+            pack.draw(&mut self.uploads, encoder, &self.lightmap_view, &info);
+            // The native lightmap goes up again if the pack's shader goes.
+            self.lightmap_uploaded = false;
+            return;
+        }
         // lightmap.fsh: per (block, sky) level.
         let brightness = |level: f32| level / (4.0 - 3.0 * level);
         let mut pixels = [0u8; 16 * 16 * 4];

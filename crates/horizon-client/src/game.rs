@@ -20010,6 +20010,7 @@ fn build_renderer(
     renderer
         .hud
         .set_cit_glints(&renderer.device, &renderer.queue, cit_glints);
+    renderer.set_lightmap_shader(atlas.lightmap_shader.as_deref());
     Ok(renderer)
 }
 

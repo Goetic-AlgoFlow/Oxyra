@@ -12,7 +12,7 @@ use std::{
 use wgpu::util::DeviceExt;
 
 pub mod cit_glint;
-mod pack_text;
+pub(crate) mod pack_text;
 
 /// A sprite's atlas region, and its size in GUI pixels: the size of the
 /// default resources' texture of that name, whatever the resolution of the
@@ -102,6 +102,8 @@ pub struct HudAtlas {
     pub emissive: std::sync::Arc<horizon_optifine::emissive::Emissive>,
     /// ETF's blinking frames (`_blink`), packed here too.
     pub blinks: horizon_optifine::blink::Blinks,
+    /// A resource pack's `core/lightmap` shader (`Renderer::set_lightmap_shader`).
+    pub lightmap_shader: Option<std::sync::Arc<horizon_shaders::CoreProgram>>,
     white: Rect,
 }
 /// Atlas rows reserved for glyphs rasterized at run time.
@@ -694,6 +696,8 @@ impl HudAtlas {
     pub fn build_over_with_image(root: &Path, defaults: &Path, mod_image: bool) -> Result<Self> {
         let mut atlas = Self::pack(root, defaults, WALKED_TEXTURE_FOLDERS, true, mod_image)?;
         atlas.text_shader = pack_text::load(root, defaults);
+        atlas.lightmap_shader =
+            crate::gfx::pack_lightmap::load(root, defaults).map(std::sync::Arc::new);
         Ok(atlas)
     }
     /// Empty slots written at run time: map textures (game/maps.rs), the
@@ -824,6 +828,7 @@ impl HudAtlas {
             random_textures: Default::default(),
             emissive: Default::default(),
             blinks: Default::default(),
+            lightmap_shader: None,
         }
     }
     /// `layout`, but when `extras` (Custom Item Textures) make the images more than `max`
@@ -1267,6 +1272,7 @@ impl HudAtlas {
             random_textures,
             emissive,
             blinks,
+            lightmap_shader: None,
             font,
             white,
         })
