@@ -377,7 +377,7 @@ impl Game<'_> {
         generic.then(|| self.container_size() / 9)
     }
     /// The title of the open chest-like menu.
-    fn chest_title(&self, rows: usize) -> Text {
+    pub(super) fn chest_title(&self, rows: usize) -> Text {
         if let Some((_, title)) = self.remote_chest_menu() {
             return title;
         }
