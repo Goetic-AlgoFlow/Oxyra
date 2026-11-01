@@ -420,7 +420,7 @@ impl Game<'_> {
             return;
         }
         self.system_message(Text::literal(format!(
-            "Horizon mods are native now: {names} stopped running until they have a native version. The launcher's Mods page has the native ones."
+            "Oxyra mods are native now: {names} stopped running until they have a native version. The launcher's Mods page has the native ones."
         )));
         let _ = std::fs::write(&seen, "");
     }

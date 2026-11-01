@@ -16,7 +16,7 @@ const MUTE_LEVEL: u8 = 3;
 pub(super) const MUTE_COMMANDS: [&str; 4] = ["mute", "tempmute", "mutelist", "unmute"];
 
 /// The reason a temporary ban gives at login.
-const BAN_REASON: &str = "Hate speech in chat (Horizon chat filter)";
+const BAN_REASON: &str = "Hate speech in chat (Oxyra chat filter)";
 
 impl Game<'_> {
     /// The hub's events from a filtered text: `ChatFiltered` carried out here, the others logged.
