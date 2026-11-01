@@ -6481,6 +6481,13 @@ impl Renderer {
                 let mut boxed = Vec::new();
                 self.sections
                     .visible(camera, radius, &light, |_| true, |_, _| false, &mut boxed);
+                // A section outside what the camera sees, stretched toward the light, shades
+                // nothing on screen (behind the player, say): the light's box alone kept them.
+                let casters = view.toward(v.light);
+                boxed.retain(|s| {
+                    let min = Vec3::from(s.origin);
+                    casters.intersects(min, min + Vec3::splat(16.0))
+                });
                 let seen: std::collections::HashSet<_> =
                     shadow_visible.iter().map(|s| s.key).collect();
                 shadow_visible.extend(boxed.into_iter().filter(|s| !seen.contains(&s.key)));
@@ -9722,6 +9729,21 @@ pub struct Frustum {
     planes: [Vec4; 6],
 }
 impl Frustum {
+    /// The frustum stretched without end toward `light` (a direction): what a point must lie
+    /// in for its shadow, cast away from the light, to fall inside. A plane the stretch leaves
+    /// (its normal against `light`) no longer bounds it and is dropped; the rest still do, so
+    /// the volume holds every such point and some more.
+    pub fn toward(self, light: Vec3) -> Frustum {
+        Frustum {
+            planes: self.planes.map(|p| {
+                if p.truncate().dot(light) < 0.0 {
+                    Vec4::W
+                } else {
+                    p
+                }
+            }),
+        }
+    }
     /// Whether the camera-relative box `min..max` is at least partly inside.
     pub fn intersects(&self, min: Vec3, max: Vec3) -> bool {
         !self.planes.iter().any(|p| {
@@ -9862,6 +9884,33 @@ fn frustum(m: Mat4) -> [Vec4; 6] {
 #[cfg(test)]
 mod tests {
     use crate::gfx::static_entity_shader;
+    /// The camera looks down -Z under a noon sun: what is behind it casts no shadow it sees;
+    /// what is above the view does, and what is below it does not.
+    #[test]
+    fn shadow_casters_are_what_the_camera_sees_stretched_toward_the_light() {
+        use glam::{Mat4, Vec3};
+        let projection = Mat4::perspective_rh_gl(70f32.to_radians(), 16.0 / 9.0, 0.05, 256.0);
+        let view = super::Frustum {
+            planes: super::frustum(projection),
+        };
+        let casters = view.toward(Vec3::Y);
+        let section = |x: f32, y: f32, z: f32| {
+            let min = Vec3::new(x, y, z);
+            casters.intersects(min, min + Vec3::splat(16.0))
+        };
+        assert!(section(-8.0, -8.0, -60.0), "in view");
+        assert!(
+            section(-8.0, 120.0, -60.0),
+            "above the view, over what it sees"
+        );
+        assert!(!section(-8.0, -8.0, 40.0), "behind the camera");
+        assert!(!section(-8.0, -200.0, -60.0), "under the view");
+        assert!(!section(150.0, -8.0, -60.0), "beside the view");
+        // A low sun ahead: what lies beyond the far plane toward it shades the view.
+        let casters = view.toward(Vec3::new(0.0, 0.2, -1.0).normalize());
+        let min = Vec3::new(-8.0, -8.0, -400.0);
+        assert!(casters.intersects(min, min + Vec3::splat(16.0)));
+    }
 
     fn adapter(device_type: wgpu::DeviceType) -> wgpu::AdapterInfo {
         wgpu::AdapterInfo {
