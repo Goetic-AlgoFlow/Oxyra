@@ -117,6 +117,32 @@ pub(crate) fn put(tag: &mut Tag, key: &str, value: Tag) {
         map.insert(key.into(), value);
     }
 }
+/// `MobEffectInstance.CODEC`: the fields at their defaults (amplifier 0,
+/// duration 0, not ambient, particles shown) are left out; `show_icon`, which
+/// follows the particles here, is always written.
+pub(crate) fn effect_tag(
+    id: &str,
+    duration: i32,
+    amplifier: i32,
+    ambient: bool,
+    particles: bool,
+) -> Tag {
+    let mut e = vec![("id", string(id))];
+    if amplifier != 0 {
+        e.push(("amplifier", Tag::Byte(amplifier.clamp(0, 255) as u8 as i8)));
+    }
+    if duration != 0 {
+        e.push(("duration", Tag::Int(duration)));
+    }
+    if ambient {
+        e.push(("ambient", Tag::Byte(1)));
+    }
+    if !particles {
+        e.push(("show_particles", Tag::Byte(0)));
+    }
+    e.push(("show_icon", Tag::Byte(i8::from(particles))));
+    Tag::compound(e)
+}
 fn compound_or_empty(tag: Option<Tag>) -> Tag {
     match tag {
         Some(t @ Tag::Compound(_)) => t,
@@ -4104,14 +4130,7 @@ impl Level {
                     self.active_effects
                         .iter()
                         .map(|(id, duration, amplifier, ambient, particles)| {
-                            Tag::compound([
-                                ("id", string(id)),
-                                ("duration", Tag::Int(*duration)),
-                                ("amplifier", Tag::Byte(*amplifier as i8)),
-                                ("ambient", Tag::Byte(i8::from(*ambient))),
-                                ("show_particles", Tag::Byte(i8::from(*particles))),
-                                ("show_icon", Tag::Byte(i8::from(*particles))),
-                            ])
+                            effect_tag(id, *duration, *amplifier, *ambient, *particles)
                         })
                         .collect(),
                 ),
@@ -5079,6 +5098,25 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 #[cfg(test)]
 mod tests {
     use crate::mobs::spawner::SpawnDataExt;
+
+    #[test]
+    fn an_effect_leaves_out_its_default_fields_as_the_codec_does() {
+        // What `data get` prints on a vanilla server for a tipped arrow's poison.
+        let plain = effect_tag("minecraft:poison", 193, 0, false, true);
+        assert_eq!(
+            plain,
+            Tag::compound([
+                ("id", Tag::String("minecraft:poison".into())),
+                ("duration", Tag::Int(193)),
+                ("show_icon", Tag::Byte(1)),
+            ])
+        );
+        let hidden = effect_tag("minecraft:resistance", 100, 3, true, false);
+        assert_eq!(hidden.get("amplifier"), Some(&Tag::Byte(3)));
+        assert_eq!(hidden.get("ambient"), Some(&Tag::Byte(1)));
+        assert_eq!(hidden.get("show_particles"), Some(&Tag::Byte(0)));
+        assert_eq!(hidden.get("show_icon"), Some(&Tag::Byte(0)));
+    }
 
     #[test]
     fn a_server_falls_back_to_level_dat_old_and_restores_it() {
