@@ -2175,11 +2175,13 @@ impl PackPost {
             let t =
                 super::pack_shadow::ShadowTargets::new(device, &shadow_config, f, colors, depth1);
             notes.push(format!(
-                "shadow map {0}x{0} over {2} blocks, sunPathRotation {3}, shadowcolor buffers {colors:#b}{1}",
+                "shadow map {0}x{0} over {2} blocks, sunPathRotation {3}, shadowcolor buffers {colors:#b}{1}, culling {4:?}, voxelDistance {5}",
                 t.size,
                 if depth1 { ", shadowtex1" } else { "" },
                 shadow_config.distance,
                 shadow_config.sun_path_rotation,
+                post.shadow_culling,
+                shadow_config.voxel_distance,
             ));
             t
         });

@@ -6483,7 +6483,20 @@ impl Renderer {
                     .visible(camera, radius, &light, |_| true, |_, _| false, &mut boxed);
                 // A section outside what the camera sees, stretched toward the light, shades
                 // nothing on screen (behind the player, say): the light's box alone kept them.
-                let casters = view.toward(v.light);
+                // A point outside the light's box is not in the shadow map: none lies farther
+                // than its farthest corner.
+                let inverse = v.cull.inverse();
+                let reach = (0..8)
+                    .map(|i| {
+                        let ndc = Vec3::new(
+                            if i & 1 == 0 { -1.0 } else { 1.0 },
+                            if i & 2 == 0 { -1.0 } else { 1.0 },
+                            if i & 4 == 0 { 0.0 } else { 1.0 },
+                        );
+                        inverse.project_point3(ndc).length()
+                    })
+                    .fold(0.0, f32::max);
+                let casters = Casters::new(cull_proj, reach, v.light);
                 boxed.retain(|s| {
                     let min = Vec3::from(s.origin);
                     casters.intersects(min, min + Vec3::splat(16.0))
@@ -9728,22 +9741,80 @@ impl Cull for Frusta {
 pub struct Frustum {
     planes: [Vec4; 6],
 }
-impl Frustum {
-    /// The frustum stretched without end toward `light` (a direction): what a point must lie
-    /// in for its shadow, cast away from the light, to fall inside. A plane the stretch leaves
-    /// (its normal against `light`) no longer bounds it and is dropped; the rest still do, so
-    /// the volume holds every such point and some more.
-    pub fn toward(self, light: Vec3) -> Frustum {
-        Frustum {
-            planes: self.planes.map(|p| {
-                if p.truncate().dot(light) < 0.0 {
-                    Vec4::W
-                } else {
-                    p
-                }
-            }),
+/// The camera's frustum stretched without end toward the light: where a point must lie for its
+/// shadow, cast away from the light, to fall in view. Its faces are the frustum's planes the
+/// stretch does not leave (normal along the light) and, along each edge between one of those
+/// and one it leaves (the silhouette), the plane through that edge and the light's direction.
+pub struct Casters {
+    planes: Vec<Vec4>,
+}
+impl Casters {
+    /// For the camera-relative `view_proj` (depth 0..1, as `frustum` reads it), cut at `reach`
+    /// blocks from the camera (what lies farther needs no shadow), and `light`, the direction
+    /// toward the light.
+    pub fn new(view_proj: Mat4, reach: f32, light: Vec3) -> Self {
+        let mut planes = frustum(view_proj);
+        // Corner i: x, y and depth from bits 0, 1 and 2; plane k holds the corners whose bit
+        // k / 2 is k % 2 (`frustum`'s order: left, right, bottom, top, depth 0, depth 1).
+        let inverse = view_proj.inverse();
+        let mut corners: [Vec3; 8] = std::array::from_fn(|i| {
+            let bit = |b: usize| i >> b & 1 == 1;
+            inverse.project_point3(Vec3::new(
+                if bit(0) { 1.0 } else { -1.0 },
+                if bit(1) { 1.0 } else { -1.0 },
+                if bit(2) { 1.0 } else { 0.0 },
+            ))
+        });
+        let on = |k: usize, i: usize| (i >> (k / 2) & 1) == k % 2;
+        // The far face (depth 0 or 1, whichever is farther) moves in to `reach` along the view.
+        let face = |k: usize| (0..8).filter(move |&i| on(k, i));
+        let depth = |k: usize| face(k).map(|i| corners[i].length()).fold(0.0, f32::max);
+        let far = if depth(4) > depth(5) { 4 } else { 5 };
+        let forward = face(9 - far)
+            .map(|i| corners[i])
+            .sum::<Vec3>()
+            .normalize_or_zero();
+        let along = face(far)
+            .map(|i| corners[i].dot(forward))
+            .fold(0.0, f32::max);
+        if forward != Vec3::ZERO && reach < along {
+            for i in face(far).collect::<Vec<_>>() {
+                corners[i] *= reach / corners[i].dot(forward);
+            }
+            planes[far] = (-forward).extend(reach);
         }
+        let centre = corners.iter().sum::<Vec3>() / 8.0;
+        let kept = planes.map(|p| p.truncate().dot(light) >= 0.0);
+        let mut out: Vec<Vec4> = (0..6).filter(|&k| kept[k]).map(|k| planes[k]).collect();
+        for a in (0..6).filter(|&a| kept[a]) {
+            for b in (0..6).filter(|&b| !kept[b] && b / 2 != a / 2) {
+                let mut ends = (0..8).filter(|&i| on(a, i) && on(b, i)).map(|i| corners[i]);
+                let (Some(p), Some(q)) = (ends.next(), ends.next()) else {
+                    continue;
+                };
+                // An edge along the light bounds nothing; leaving it out keeps more.
+                let Some(n) = (q - p).cross(light).try_normalize() else {
+                    continue;
+                };
+                let n = if n.dot(centre - p) < 0.0 { -n } else { n };
+                out.push(n.extend(-n.dot(p)));
+            }
+        }
+        Casters { planes: out }
     }
+    /// Whether the camera-relative box `min..max` is at least partly inside.
+    pub fn intersects(&self, min: Vec3, max: Vec3) -> bool {
+        !self.planes.iter().any(|p| {
+            let v = Vec3::new(
+                if p.x >= 0.0 { max.x } else { min.x },
+                if p.y >= 0.0 { max.y } else { min.y },
+                if p.z >= 0.0 { max.z } else { min.z },
+            );
+            p.truncate().dot(v) + p.w < 0.0
+        })
+    }
+}
+impl Frustum {
     /// Whether the camera-relative box `min..max` is at least partly inside.
     pub fn intersects(&self, min: Vec3, max: Vec3) -> bool {
         !self.planes.iter().any(|p| {
@@ -9884,32 +9955,53 @@ fn frustum(m: Mat4) -> [Vec4; 6] {
 #[cfg(test)]
 mod tests {
     use crate::gfx::static_entity_shader;
-    /// The camera looks down -Z under a noon sun: what is behind it casts no shadow it sees;
-    /// what is above the view does, and what is below it does not.
+    /// Every section whose shadow reaches the view within `reach` is kept (checked by pushing
+    /// points of it away from the light), and many that cannot are not: under a noon sun, with
+    /// a low sun ahead, and with Complementary's morning sun behind a camera facing south-west.
+    /// The culling view reaches 2048 blocks, as the game's does for distant terrain.
     #[test]
     fn shadow_casters_are_what_the_camera_sees_stretched_toward_the_light() {
         use glam::{Mat4, Vec3};
-        let projection = Mat4::perspective_rh_gl(70f32.to_radians(), 16.0 / 9.0, 0.05, 256.0);
-        let view = super::Frustum {
-            planes: super::frustum(projection),
-        };
-        let casters = view.toward(Vec3::Y);
-        let section = |x: f32, y: f32, z: f32| {
-            let min = Vec3::new(x, y, z);
-            casters.intersects(min, min + Vec3::splat(16.0))
-        };
-        assert!(section(-8.0, -8.0, -60.0), "in view");
-        assert!(
-            section(-8.0, 120.0, -60.0),
-            "above the view, over what it sees"
-        );
-        assert!(!section(-8.0, -8.0, 40.0), "behind the camera");
-        assert!(!section(-8.0, -200.0, -60.0), "under the view");
-        assert!(!section(150.0, -8.0, -60.0), "beside the view");
-        // A low sun ahead: what lies beyond the far plane toward it shades the view.
-        let casters = view.toward(Vec3::new(0.0, 0.2, -1.0).normalize());
-        let min = Vec3::new(-8.0, -8.0, -400.0);
-        assert!(casters.intersects(min, min + Vec3::splat(16.0)));
+        let projection = super::world_projection(70.0, 16.0 / 9.0, 2048.0);
+        let reach = 300.0;
+        let cases = [
+            (Vec3::NEG_Z, Vec3::Y),
+            (Vec3::NEG_Z, Vec3::new(0.0, 0.2, -1.0).normalize()),
+            (
+                Vec3::new(-0.68, -0.26, 0.68).normalize(),
+                Vec3::new(0.867, 0.498, 0.0),
+            ),
+        ];
+        for (look, light) in cases {
+            let view_proj = projection * Mat4::look_to_rh(Vec3::ZERO, look, Vec3::Y);
+            let view = super::Frustum {
+                planes: super::frustum(view_proj),
+            };
+            let casters = super::Casters::new(view_proj, reach, light);
+            let seen = |p: Vec3| p.length() <= reach && view.intersects(p, p);
+            let (mut all, mut kept) = (0, 0);
+            for x in (-192..192).step_by(16) {
+                for y in (-64..64).step_by(16) {
+                    for z in (-192..192).step_by(16) {
+                        let min = Vec3::new(x as f32, y as f32, z as f32);
+                        let keeps = casters.intersects(min, min + Vec3::splat(16.0));
+                        all += 1;
+                        kept += usize::from(keeps);
+                        let shades = (0..27).any(|k| {
+                            let at = min
+                                + Vec3::new((k % 3) as f32, (k / 3 % 3) as f32, (k / 9) as f32)
+                                    * 8.0;
+                            (0..400).any(|t| seen(at - light * t as f32))
+                        });
+                        assert!(keeps || !shades, "{min} shades {look} under {light}");
+                    }
+                }
+            }
+            assert!(
+                kept * 4 < all * 3,
+                "{kept} of {all} kept, {look} under {light}"
+            );
+        }
     }
 
     fn adapter(device_type: wgpu::DeviceType) -> wgpu::AdapterInfo {
