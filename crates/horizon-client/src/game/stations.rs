@@ -2194,7 +2194,10 @@ impl Game<'_> {
                 .or_else(|| s.item_name())
                 .unwrap_or_else(|| self.pack.names.display_item(&s.item))
         };
-        if display.shows("minecraft:container") {
+        // A native mod's grid of the contents (`native_tooltip_items`) stands for these lines.
+        let mut grid = None;
+        self.native_tooltip_items(stack, &mut grid);
+        if display.shows("minecraft:container") && grid.is_none() {
             for text in
                 horizon_client::item_tooltip::container_lines(stack, &hover_name, &translate)
             {
@@ -2690,13 +2693,25 @@ impl Game<'_> {
         // The component's height does not depend on where it is drawn, so a
         // probe at the origin gives the box its extra height.
         let probe = horizon_client::bundle::tooltip_layout(self.items(), stack, 0.0, 0.0, 96.0);
-        let bundle_extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0);
+        // A native mod's grid (a shulker box's contents), when the stack is no bundle.
+        let mut grid = None;
+        if probe.is_none() {
+            self.native_tooltip_items(stack, &mut grid);
+        }
+        let grid = grid.filter(|g| g.columns > 0 && !g.slots.is_empty());
+        let grid_size = grid.as_ref().map(|g| {
+            let rows = g.slots.len().div_ceil(g.columns as usize);
+            (g.columns as f32 * 18.0, rows as f32 * 18.0)
+        });
+        let bundle_extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0)
+            + grid_size.map_or(0.0, |(_, gh)| gh + 2.0);
         let mut component = None;
         self.native_tooltip_component(stack, &mut component);
         let component = tooltip_component_size(component);
         let extra = bundle_extra + component.map_or(0.0, |size| size[1] + 2.0);
         let min_width = (if probe.is_some() { 96.0_f32 } else { 0.0 })
-            .max(component.map_or(0.0, |size| size[0]));
+            .max(component.map_or(0.0, |size| size[0]))
+            .max(grid_size.map_or(0.0, |(gw, _)| gw));
         let atlas = &self.gui.atlas;
         let (x, y, w, h) = Self::tooltip_geometry(
             atlas,
@@ -2708,6 +2723,9 @@ impl Game<'_> {
         self.tooltip_box(batch, Some(stack), x, y, w, h);
         let text_h = h - extra;
         Self::tooltip_text(batch, atlas, &lines, x, y);
+        if let Some(grid) = &grid {
+            self.draw_tooltip_items(batch, grid, x, y + text_h + 2.0);
+        }
         if let Some(layout) =
             horizon_client::bundle::tooltip_layout(self.items(), stack, x, y + text_h + 2.0, w)
         {
@@ -2754,6 +2772,31 @@ impl Game<'_> {
         }
         self.tooltip_box(batch, Some(stack), px, py, tw, 8.0);
         Self::tooltip_text(batch, atlas, &lines, px, py);
+    }
+    /// A native mod's grid under a tooltip: 18 pixel squares drawn as an inventory slot (a
+    /// dark top-left edge, a light bottom-right one), each item with its count.
+    fn draw_tooltip_items(
+        &mut self,
+        batch: &mut HudBatch,
+        grid: &super::native_hooks::NativeTooltipItems,
+        x: f32,
+        y: f32,
+    ) {
+        let columns = grid.columns as usize;
+        for (i, stack) in grid.slots.iter().enumerate() {
+            let (sx, sy) = (
+                x + (i % columns) as f32 * 18.0,
+                y + (i / columns) as f32 * 18.0,
+            );
+            let atlas = &self.gui.atlas;
+            batch.fill(atlas, sx, sy, 18.0, 18.0, rgba(255, 255, 255, 255));
+            batch.fill(atlas, sx, sy, 17.0, 17.0, rgba(55, 55, 55, 255));
+            let inner = grid.tint.unwrap_or(rgba(139, 139, 139, 255));
+            batch.fill(atlas, sx + 1.0, sy + 1.0, 16.0, 16.0, inner);
+            if let Some(stack) = stack {
+                self.draw_item(batch, stack, sx + 1.0, sy + 1.0);
+            }
+        }
     }
     /// `ClientBundleTooltip.extractImage`: the slots, the count past them and
     /// the progress bar.
