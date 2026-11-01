@@ -4524,6 +4524,15 @@ impl OptionsUi {
         if self.resource_error.is_some() {
             return;
         }
+        // Committed text (an IME's, the pad's keyboard) goes to a native mod's field too.
+        if let Some((_, _, buf)) = &mut self.native_text {
+            for c in text.chars().filter(|c| !c.is_control()) {
+                if buf.chars().count() < 32 {
+                    buf.push(c);
+                }
+            }
+            return;
+        }
         if self.page() == Page::Packs
             && let Some(p) = &mut self.pack_screen
         {
@@ -5866,6 +5875,13 @@ mod tests {
         ui.key(&mut s, &atlas, K::KeyA, Some("x"));
         assert!(ui.key(&mut s, &atlas, K::Escape, None).is_empty());
         assert_eq!(field(&mut ui, &s).unwrap().0, "Auto");
+        // Committed text (an IME's, the control socket's `type`) types in it too.
+        click(&mut ui, &mut s);
+        ui.type_text(&atlas, "!");
+        assert_eq!(
+            ui.key(&mut s, &atlas, K::Enter, None),
+            vec![Event::NativeText(0, 1, "Auto!".into())]
+        );
     }
 
     fn mode(width: i32, rate: f32) -> crate::window::VideoMode {
