@@ -465,9 +465,177 @@ fn combine(
     out.code = code.trim_end_matches('\n').to_owned();
     out.lines.truncate(out.code.split('\n').count());
     // A strip of n vertices is n - 2 triangles: at most `max_vertices - 2`, whichever of the
-    // stage's paths runs.
-    let triangles = max_vertices.saturating_sub(2).max(1);
+    // stage's paths runs, and fewer where its emissions can be followed (each instance costs a
+    // run of both stages per corner: Rethinking Voxels emits 2 of the 4 its 6 vertices allow).
+    let most = max_vertices.saturating_sub(2).max(1);
+    let triangles = emitted_triangles(&gs_tokens).map_or(most, |t| t.clamp(1, most));
     Ok((out, triangles))
+}
+
+/// The most triangles the geometry stage's `main` emits, following its statements: a strip's
+/// vertices add up until `EndPrimitive`, `if` takes the worse branch, and a `for` from a
+/// constant to a constant runs its body that many times. `None` where it cannot tell (an
+/// emission in another function, a loop it cannot count, a jump out of a loop that emits).
+fn emitted_triangles(tokens: &[&str]) -> Option<u32> {
+    let t: Vec<&str> = tokens.iter().copied().filter(|t| significant(t)).collect();
+    let main = (0..t.len()).find(|&i| t[i..].starts_with(&["main", "(", ")", "{"]))?;
+    let open = main + 3;
+    let close = matching(&t, open)?;
+    let emits = |range: std::ops::Range<usize>| {
+        t[range]
+            .iter()
+            .any(|w| matches!(*w, "EmitVertex" | "EndPrimitive"))
+    };
+    // Every emission is in `main`.
+    if emits(0..open) || emits(close..t.len()) {
+        return None;
+    }
+    Some(Strip::default().block(&t, open, &emits)?.triangles)
+}
+
+/// Vertices in the open strip and triangles so far, at most.
+#[derive(Clone, Copy, Default)]
+struct Strip {
+    vertices: u32,
+    triangles: u32,
+}
+
+type Emits<'a> = dyn Fn(std::ops::Range<usize>) -> bool + 'a;
+
+impl Strip {
+    fn join(self, other: Self) -> Self {
+        Strip {
+            vertices: self.vertices.max(other.vertices),
+            triangles: self.triangles.max(other.triangles),
+        }
+    }
+
+    /// The `{` at `open` to its `}`.
+    fn block(self, t: &[&str], open: usize, emits: &Emits<'_>) -> Option<Self> {
+        let close = matching(t, open)?;
+        let mut state = self;
+        let mut i = open + 1;
+        while i < close {
+            let (next, after) = state.statement(t, i, emits)?;
+            state = next;
+            i = after;
+        }
+        Some(state)
+    }
+
+    /// The statement at `i`: the state after it and where the next one starts.
+    fn statement(self, t: &[&str], i: usize, emits: &Emits<'_>) -> Option<(Self, usize)> {
+        let end = statement_end(t, i)?;
+        let state = match t[i] {
+            "{" => self.block(t, i, emits)?,
+            "EmitVertex" => {
+                let vertices = self.vertices.saturating_add(1);
+                Strip {
+                    vertices,
+                    triangles: self.triangles + u32::from(vertices >= 3),
+                }
+            }
+            "EndPrimitive" => Strip {
+                vertices: 0,
+                ..self
+            },
+            "if" => {
+                let cond = matching(t, i + 1)?;
+                let (then, then_end) = self.statement(t, cond + 1, emits)?;
+                if t.get(then_end) == Some(&"else") {
+                    then.join(self.statement(t, then_end + 1, emits)?.0)
+                } else {
+                    then.join(self)
+                }
+            }
+            "for" if emits(i..end) => {
+                let header = matching(t, i + 1)?;
+                let count = loop_count(&t[i + 2..header])?;
+                if t[header + 1..end]
+                    .iter()
+                    .any(|w| matches!(*w, "break" | "continue"))
+                {
+                    return None;
+                }
+                let mut state = self;
+                for _ in 0..count {
+                    state = state.statement(t, header + 1, emits)?.0;
+                }
+                state
+            }
+            _ if emits(i..end) => return None,
+            _ => self,
+        };
+        Some((state, end))
+    }
+}
+
+/// Where the statement at `i` ends: after its `;` or its block, `else` branches included.
+fn statement_end(t: &[&str], i: usize) -> Option<usize> {
+    match *t.get(i)? {
+        "{" => Some(matching(t, i)? + 1),
+        "if" => {
+            let then = statement_end(t, matching(t, i + 1)? + 1)?;
+            if t.get(then) == Some(&"else") {
+                statement_end(t, then + 1)
+            } else {
+                Some(then)
+            }
+        }
+        "for" | "while" => statement_end(t, matching(t, i + 1)? + 1),
+        "do" => {
+            let body = statement_end(t, i + 1)?;
+            Some(matching(t, body + 1)? + 2)
+        }
+        _ => {
+            let mut depth = 0i32;
+            (i..t.len())
+                .find(|&j| {
+                    depth += i32::from(matches!(t[j], "(" | "[" | "{"))
+                        - i32::from(matches!(t[j], ")" | "]" | "}"));
+                    depth == 0 && t[j] == ";"
+                })
+                .map(|j| j + 1)
+        }
+    }
+}
+
+/// `int i = 0; i < 3; i++`: how many times the loop runs, both bounds literals.
+fn loop_count(header: &[&str]) -> Option<u32> {
+    let number = |w: &str| w.trim_end_matches(['u', 'U']).parse::<u32>().ok();
+    let mut parts = header.split(|w| *w == ";");
+    let (init, cond, step) = (parts.next()?, parts.next()?, parts.next()?);
+    let (var, start) = match init {
+        [_, var, "=", start] | [var, "=", start] => (*var, number(start)?),
+        _ => return None,
+    };
+    // The lexer gives operators a character at a time.
+    let end = match cond {
+        [v, "<", n] if *v == var => number(n)?,
+        [v, "<", "=", n] if *v == var => number(n)? + 1,
+        _ => return None,
+    };
+    match step {
+        [v, "+", "+"] | ["+", "+", v] | [v, "+", "=", "1"] if *v == var => {
+            Some(end.saturating_sub(start))
+        }
+        _ => None,
+    }
+}
+
+/// The token closing the bracket at `open`.
+fn matching(t: &[&str], open: usize) -> Option<usize> {
+    let (o, c) = match *t.get(open)? {
+        "(" => ("(", ")"),
+        "{" => ("{", "}"),
+        "[" => ("[", "]"),
+        _ => return None,
+    };
+    let mut depth = 0;
+    (open..t.len()).find(|&j| {
+        depth += i32::from(t[j] == o) - i32::from(t[j] == c);
+        depth == 0
+    })
 }
 
 /// Functions whose calls write memory other invocations see.
@@ -670,6 +838,41 @@ mod tests {
         let fsh = "#version 430\nuniform float far;\nin float gDepth;\n\
                    void main() {\n    gl_FragData[0] = vec4(gDepth / far);\n}\n";
         fold(vsh, gsh, fsh).unwrap_or_else(|e| panic!("{e:?}"));
+    }
+
+    #[test]
+    fn the_triangles_a_stage_emits_are_counted_where_they_can_be() {
+        let count = |main: &str| emitted_triangles(&lex(&format!("void main() {{ {main} }}")));
+        // Rethinking Voxels: a triangle on one branch, then the shadow triangle.
+        let three =
+            "for (int i = 0; i < 3; i++) { gl_Position = p[i]; EmitVertex(); } EndPrimitive();";
+        assert_eq!(
+            count(&format!(
+                "if (a) {{ x(); }} else if (b) {{ {three} }} {three}"
+            )),
+            Some(2)
+        );
+        // A strip of four corners is two triangles; strips an `EndPrimitive` may skip join.
+        assert_eq!(
+            count("for (int i = 0; i <= 3; ++i) EmitVertex(); EndPrimitive();"),
+            Some(2)
+        );
+        assert_eq!(
+            count("EmitVertex(); EmitVertex(); if (c) EndPrimitive(); EmitVertex(); EmitVertex();"),
+            Some(2)
+        );
+        // Loops it cannot count, or that may leave a strip open.
+        assert_eq!(count("for (int i = 0; i < n; i++) EmitVertex();"), None);
+        assert_eq!(count("while (c) { EmitVertex(); }"), None);
+        assert_eq!(
+            count("for (int i = 0; i < 3; i++) { EmitVertex(); if (c) continue; EndPrimitive(); }"),
+            None
+        );
+        // An emission outside `main`.
+        assert_eq!(
+            emitted_triangles(&lex("void f() { EmitVertex(); } void main() { f(); }")),
+            None
+        );
     }
 
     #[test]
