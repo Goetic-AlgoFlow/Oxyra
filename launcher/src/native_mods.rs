@@ -955,6 +955,32 @@ fn hooks_in(source: &str) -> Option<u32> {
     line.trim_end().strip_suffix(';')?.parse().ok()
 }
 
+/// A local Git checkout of Horizon's source to build native mods on instead of GitHub's archive:
+/// a personal build's own commits, which GitHub doesn't have. Its `HEAD` is the build's revision.
+const LOCAL_SOURCE: &str = "HORIZON_NATIVE_SOURCE";
+
+fn local_source() -> Option<PathBuf> {
+    std::env::var_os(LOCAL_SOURCE)
+        .map(PathBuf::from)
+        .filter(|dir| dir.join(".git").exists())
+}
+
+fn local_revision(dir: &Path) -> Result<String, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{} is not a Git checkout with a commit",
+            dir.display()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 /// The native hook points' version of Horizon at `revision`, from GitHub (None: it has none).
 fn hooks_at(revision: &str) -> Option<u32> {
     let url = format!(
@@ -1622,12 +1648,18 @@ fn source(revision: &str) -> Result<PathBuf, String> {
     if dir.join(".horizon-revision").is_file() {
         return Ok(dir);
     }
-    let archive = format!(
-        "https://codeload.github.com/{}/tar.gz/{revision}",
-        backend::REPO
-    );
     let partial = root().join("source").join(format!(".{revision}.partial"));
-    let top = unpack_archive(&archive, &partial, u64::MAX)?;
+    let local = local_source().filter(|d| local_revision(d).ok().as_deref() == Some(revision));
+    let top = match local {
+        Some(checkout) => local_archive(&checkout, revision, &partial)?,
+        None => {
+            let archive = format!(
+                "https://codeload.github.com/{}/tar.gz/{revision}",
+                backend::REPO
+            );
+            unpack_archive(&archive, &partial, u64::MAX)?
+        }
+    };
     fs::write(top.join(".horizon-revision"), revision).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&dir);
     backend::rename_new_dir(&top, &dir).map_err(|e| e.to_string())?;
@@ -1635,13 +1667,40 @@ fn source(revision: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// The local checkout's commit `revision` as `git archive` writes it, unpacked into `partial` as
+/// GitHub's archive is (its one top folder returned).
+fn local_archive(checkout: &Path, revision: &str, partial: &Path) -> Result<PathBuf, String> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(checkout)
+        .args(["archive", "--format=tar", "--prefix=source/", revision])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("git: {e}"))?;
+    let stdout = child.stdout.take().ok_or("git archive gave no output")?;
+    let top = unpack_tar(stdout, partial);
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err(format!("git archive {revision} failed ({status})"));
+    }
+    top
+}
+
 /// GitHub's archive (`.tar.gz`) at `url`, unpacked into the fresh folder `partial`: the archive's
 /// one top folder, which is returned. Links are left out; at most `limit` bytes are unpacked.
 pub(crate) fn unpack_archive(url: &str, partial: &Path, limit: u64) -> Result<PathBuf, String> {
     use std::io::Read;
+    unpack_tar(
+        flate2::read::GzDecoder::new(backend::get(url)?.into_reader()).take(limit),
+        partial,
+    )
+}
+
+/// A tar stream unpacked into the fresh folder `partial`, files and folders only: its one top
+/// folder, which is returned.
+fn unpack_tar(reader: impl std::io::Read, partial: &Path) -> Result<PathBuf, String> {
     let _ = fs::remove_dir_all(partial);
     fs::create_dir_all(partial).map_err(|e| e.to_string())?;
-    let reader = flate2::read::GzDecoder::new(backend::get(url)?.into_reader()).take(limit);
     let mut tar = tar::Archive::new(reader);
     for entry in tar.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| format!("Download interrupted: {e}"))?;
@@ -1817,7 +1876,16 @@ fn pipeline(
         |r| committed(backend::REPO, r),
     )?;
     let game = || revision_of(origin).ok();
-    let revision = with_hooks(&mods, pinned, free, game, hooks_at)?;
+    let revision = match local_source() {
+        Some(dir) => {
+            let head = local_revision(&dir)?;
+            let api = fs::read_to_string(dir.join(HOOKS_FILE))
+                .ok()
+                .and_then(|text| hooks_in(&text));
+            with_hooks(&mods, head, false, || None, |_| api)?
+        }
+        None => with_hooks(&mods, pinned, free, game, hooks_at)?,
+    };
     let other = mismatch(&mods, &revision);
     if let (Some(list), false) = (&other, anyway) {
         return Err(format!("{MISMATCH}{list}."));
