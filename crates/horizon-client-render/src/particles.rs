@@ -1096,6 +1096,16 @@ pub struct ParticleEngine {
 }
 /// `ParticleGroup.MAX_PARTICLES` (per render group; one group here).
 const MAX_PARTICLES: usize = 16384;
+
+/// Oxyra's extension point for native mods that choose which particles draw (Particle Core):
+/// called once a frame with the view's yaw and pitch, then for each particle with its offset
+/// from the camera; a particle it rejects is not drawn this frame. Set once, the first mod wins.
+pub struct RenderFilter {
+    pub begin: fn(yaw: f32, pitch: f32),
+    pub keep: fn(offset: DVec3) -> bool,
+}
+
+pub static RENDER_FILTER: std::sync::OnceLock<RenderFilter> = std::sync::OnceLock::new();
 /// `ParticleLimit.SPORE_BLOSSOM`, the only limited particle.
 const SPORE_BLOSSOM_LIMIT: usize = 1000;
 const PARTICLE_LIGHT_CACHE_SIZE: usize = 64;
@@ -4194,8 +4204,17 @@ impl ParticleEngine {
         let base = Quat::from_rotation_y(std::f32::consts::PI - yaw.to_radians())
             * Quat::from_rotation_x(-pitch.to_radians());
         let mut light_cache = ParticleLightCache::default();
+        let filter = RENDER_FILTER.get();
+        if let Some(filter) = filter {
+            (filter.begin)(yaw, pitch);
+        }
         for p in &self.particles {
             if p.no_render {
+                continue;
+            }
+            if let Some(filter) = filter
+                && !(filter.keep)(DVec3::from(p.position) - camera)
+            {
                 continue;
             }
             // SparkParticle.extract: twinkling sparks blink after a third of their life.
