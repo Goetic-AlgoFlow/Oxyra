@@ -345,7 +345,7 @@ pub fn install(progress: impl Fn(f32)) -> Result<Toolchain, String> {
     }
     fs::write(partial.join(COMPLETE), VERSION).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&dir);
-    fs::rename(&partial, &dir).map_err(|e| e.to_string())?;
+    backend::rename_new_dir(&partial, &dir).map_err(|e| e.to_string())?;
     progress(1.0);
     Ok(Toolchain { dir })
 }

@@ -1630,7 +1630,7 @@ fn source(revision: &str) -> Result<PathBuf, String> {
     let top = unpack_archive(&archive, &partial, u64::MAX)?;
     fs::write(top.join(".horizon-revision"), revision).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&dir);
-    fs::rename(&top, &dir).map_err(|e| e.to_string())?;
+    backend::rename_new_dir(&top, &dir).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&partial);
     Ok(dir)
 }
@@ -2221,7 +2221,7 @@ fn install(
     fs::write(partial.join("native-mods.json"), about.to_string()).map_err(|e| e.to_string())?;
     let dir = target.directory(version);
     let _ = fs::remove_dir_all(&dir);
-    fs::rename(&partial, &dir).map_err(|e| e.to_string())?;
+    backend::rename_new_dir(&partial, &dir).map_err(|e| e.to_string())?;
     if let Err(e) = finish(&dir) {
         let _ = fs::remove_dir_all(&dir);
         return Err(e);

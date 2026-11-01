@@ -636,6 +636,25 @@ fn versions_dir() -> PathBuf {
     data_dir().join("versions")
 }
 
+/// `fs::rename` of a folder just unpacked or built, tried again while Windows refuses it: an
+/// antivirus scanning the new executables in it keeps them open for a few seconds ("Access is
+/// denied", os error 5), which failed toolchain installs and native builds.
+pub fn rename_new_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    let started = std::time::Instant::now();
+    let mut wait = std::time::Duration::from_millis(100);
+    loop {
+        match fs::rename(from, to) {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::PermissionDenied
+                    && started.elapsed() < std::time::Duration::from_secs(30) =>
+            {
+                std::thread::sleep(wait);
+                wait = (wait * 2).min(std::time::Duration::from_secs(2));
+            }
+            done => return done,
+        }
+    }
+}
 pub fn version_dir(tag: &str) -> PathBuf {
     versions_dir().join(tag)
 }
@@ -826,7 +845,7 @@ pub(crate) fn install_as(
     }
     let target = version_dir(tag);
     let _ = fs::remove_dir_all(&target);
-    fs::rename(&top, &target).map_err(|e| e.to_string())?;
+    rename_new_dir(&top, &target).map_err(|e| e.to_string())?;
     fs::write(target.join(COMPLETE), "").map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&partial);
     reuse_prepared_for(tag);
@@ -1164,7 +1183,7 @@ fn reuse_prepared(versions: &Path, tag: &str) -> Option<String> {
                 return Ok(false); // Prepared meanwhile, by another copy or the player.
             }
             let _ = fs::remove_dir_all(&to);
-            fs::rename(&partial, &to).map(|_| true)
+            rename_new_dir(&partial, &to).map(|_| true)
         });
         let _ = fs::remove_dir_all(&partial);
         match copied {
