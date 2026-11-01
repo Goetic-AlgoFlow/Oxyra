@@ -1295,6 +1295,11 @@ impl ParticleEngine {
         self.rects.push(self.atlas.get(name).map(|&(rect, _)| rect));
         (self.names.len() - 1) as u32
     }
+    /// A sprite of the particles' atlas by name (`minecraft:block/stone`), as quads drawn in the
+    /// particle pass (`native_world_quads`) address it.
+    pub fn sprite(&self, name: &str) -> Option<Rect> {
+        self.atlas.get(name).map(|(rect, _)| *rect)
+    }
     pub fn len(&self) -> usize {
         self.particles.len()
     }

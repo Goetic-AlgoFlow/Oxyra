@@ -10997,6 +10997,7 @@ impl Game<'_> {
             &mut out,
         );
         laps.lap("eg_particles");
+        self.native_world_quads(camera, alpha as f32, &mut out);
         // Breaking progress overlays (destroy_stage_0..9): ours and the other players'.
         self.mark_stage(out.len(), "DESTROY");
         for &(pos, stage) in &cracks {
