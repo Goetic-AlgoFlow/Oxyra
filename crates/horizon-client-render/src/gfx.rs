@@ -8820,6 +8820,7 @@ impl Renderer {
                 &pages,
                 &mut terrain,
             );
+            post.flush_uniforms(&self.queue);
             self.pack_post = Some((dimension, Some(post)));
         } else if let Some((color, depth)) = &scaled
             && native_post

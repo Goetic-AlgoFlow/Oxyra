@@ -24,6 +24,8 @@ use super::pack_textures;
 use super::pack_uniforms::{self, FrameUniforms, PackInputs};
 
 const BUFFERS: usize = horizon_shaders::BUFFERS;
+/// The uniform blocks a frame can stage; past it, a pass writes its buffer itself.
+const STAGING: u64 = 1 << 20;
 
 /// The texture behind a pack sampler name.
 #[derive(Clone, Copy, PartialEq)]
@@ -542,6 +544,10 @@ pub struct PackPost {
     pub timing: Option<super::pack_timing::PassTiming>,
     /// `depthtex0` at the screen's centre, read back for `centerDepthSmooth`.
     center_depth: Option<super::pack_center_depth::CenterDepth>,
+    /// The frame's uniform blocks, uploaded at once by `flush_uniforms` and copied into each
+    /// pass's buffer where it is bound: one `write_buffer` per pass cost 3.6 ms of CPU a frame.
+    staging: wgpu::Buffer,
+    staged: std::cell::RefCell<Vec<u8>>,
     /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
     custom: horizon_shaders::Custom,
     atlas: Option<wgpu::TextureView>,
@@ -1524,7 +1530,7 @@ fn build_pass(
     Some(Pass {
         ubo: device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&p.name),
-            size: u64::from(interface.uniform_size.max(16)),
+            size: u64::from(interface.uniform_size.max(16).next_multiple_of(4)),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }),
@@ -1650,7 +1656,7 @@ fn build_compute(
     Some(Pass {
         ubo: device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&name),
-            size: u64::from(interface.uniform_size.max(16)),
+            size: u64::from(interface.uniform_size.max(16).next_multiple_of(4)),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }),
@@ -2338,6 +2344,13 @@ impl PackPost {
             gui_size: world.gui_size,
             timing: None,
             center_depth: None,
+            staging: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Shader pack uniform staging"),
+                size: STAGING,
+                usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            staged: std::cell::RefCell::new(Vec::new()),
             custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
             lightmap: world.lightmap,
@@ -2516,7 +2529,16 @@ impl PackPost {
             }
         }
         if !pass.block.is_empty() {
-            queue.write_buffer(&pass.ubo, 0, &pass.block);
+            let mut staged = self.staged.borrow_mut();
+            let at = staged.len();
+            let len = pass.block.len().next_multiple_of(4);
+            if at + len <= STAGING as usize {
+                staged.extend_from_slice(&pass.block);
+                staged.resize(at + len, 0);
+                encoder.copy_buffer_to_buffer(&self.staging, at as u64, &pass.ubo, 0, len as u64);
+            } else {
+                queue.write_buffer(&pass.ubo, 0, &pass.block);
+            }
         }
         let targets = self.targets.as_ref().expect("resized");
         let shadow = self.shadow_targets.as_ref();
@@ -2672,6 +2694,16 @@ impl PackPost {
             })
         });
         group.clone()
+    }
+
+    /// Uploads the uniform blocks the frame's passes copy from; after `run`, before the frame's
+    /// commands are submitted.
+    pub fn flush_uniforms(&self, queue: &wgpu::Queue) {
+        let mut staged = self.staged.borrow_mut();
+        if !staged.is_empty() {
+            queue.write_buffer(&self.staging, 0, &staged);
+            staged.clear();
+        }
     }
 
     /// Dispatches compute pass `pass` over a target of `size`.
