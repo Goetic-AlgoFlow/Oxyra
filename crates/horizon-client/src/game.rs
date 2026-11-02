@@ -2444,6 +2444,8 @@ struct Game<'a> {
     portal_view_seen: Vec<(Dim, [i32; 3], Option<[i32; 3]>, usize)>,
     /// The portals the window sees through, near the player and in the views.
     portal_entries: Vec<portal_view::PortalEntry>,
+    /// While the views' entities are drawn (`portal_entity_vertices`).
+    portal_entity_pass: std::cell::Cell<bool>,
     /// The portals too far to see through, drawn plain: their blocks have no faces.
     portal_far: Vec<(horizon_world::level::portal_travel::FoundRectangle, bool)>,
     /// The levels behind portals, meshed into the renderer past the world's border.
@@ -18458,6 +18460,7 @@ impl<'a> Game<'a> {
             portal_exit_search: Default::default(),
             portal_view_seen: Vec::new(),
             portal_entries: Vec::new(),
+            portal_entity_pass: Default::default(),
             portal_far: Vec::new(),
             portal_meshes: Default::default(),
             portal_view_on: (false, false),

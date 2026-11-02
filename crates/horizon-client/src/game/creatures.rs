@@ -6337,7 +6337,10 @@ impl Game<'_> {
 
     /// Whether this frame's models can be posed on the GPU (`begin_skinning`).
     pub(super) fn skinning(&self) -> bool {
-        self.renderer
+        // The portal views draw their entities from plain vertices (`portal_entity_vertices`).
+        !self.portal_entity_pass.get()
+            && self
+            .renderer
             .as_ref()
             .is_some_and(|r| r.skins_entities() && r.skinned_models().is_some())
     }

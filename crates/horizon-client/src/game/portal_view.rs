@@ -1086,6 +1086,7 @@ impl Game<'_> {
         let rendered = self.rendered_mobs.get();
         let culler = self.entity_culler.take();
         let async_culler = self.async_entity_culler.take();
+        self.portal_entity_pass.set(true);
         for p in portals.iter_mut() {
             let i = ((p.camera.x / (f64::from(PORTAL_X) * 16.0)).round() as usize)
                 .saturating_sub(1)
@@ -1102,6 +1103,7 @@ impl Game<'_> {
             self.swap_portal_entities(i);
             p.entities = Arc::new(out);
         }
+        self.portal_entity_pass.set(false);
         self.entity_culler = culler;
         self.async_entity_culler = async_culler;
         self.rendered_mobs.set(rendered);

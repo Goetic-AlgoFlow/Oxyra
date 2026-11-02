@@ -349,6 +349,7 @@ impl<'p> Stage<'p> {
                     s.builtin_varying("hz_FrontColor".into(), "vec4")
                 }
                 "gl_FogFragCoord" => s.builtin_varying("hz_FogFragCoord".into(), "float"),
+                "do" => s.do_while(i),
                 _ => {}
             }
         }
@@ -367,6 +368,47 @@ impl<'p> Stage<'p> {
                 .or_insert_with(|| vec![true, false]);
         }
         s
+    }
+
+    /// `do { ... } while (c);`: naga tests `c` at the end of the body, where a `continue`
+    /// skips it (and the `++i` in it), so a loop that continues never ends (Kappa's fog hung
+    /// the GPU). Written as a `for` whose step naga runs on `continue` too:
+    /// `for (bool hz_doN = true; hz_doN; hz_doN = (c)) { ... }`.
+    fn do_while(&mut self, d: usize) {
+        let tokens = &self.tokens;
+        let next = |from: usize| (from..tokens.len()).find(|&j| significant(tokens[j]));
+        let close = |open: usize| {
+            let (o, c) = (tokens[open], if tokens[open] == "{" { "}" } else { ")" });
+            let mut depth = 0;
+            (open..tokens.len()).find(|&j| {
+                depth += i32::from(tokens[j] == o) - i32::from(tokens[j] == c);
+                depth == 0
+            })
+        };
+        let is = |j: Option<usize>, t: &str| j.filter(|&j| tokens[j] == t);
+        let Some(body) = is(next(d + 1), "{") else {
+            return;
+        };
+        let Some(w) = close(body).and_then(|c| is(next(c + 1), "while")) else {
+            return;
+        };
+        let Some(open) = is(next(w + 1), "(") else {
+            return;
+        };
+        let Some(shut) = close(open) else {
+            return;
+        };
+        let Some(end) = is(next(shut + 1), ";") else {
+            return;
+        };
+        // shortcut: the condition is copied as written, without the rewrite's renames; fine
+        // for loop counters, wrong if it calls a sampler or a renamed builtin.
+        let condition: String = tokens[open + 1..shut].concat();
+        self.replaced.insert(
+            d,
+            format!("for (bool hz_do{d} = true; hz_do{d}; hz_do{d} = ({condition}))"),
+        );
+        self.removed.push(w..end + 1);
     }
 
     /// Names that desktop GLSL leaves free but Vulkan GLSL takes for its separate texture and
