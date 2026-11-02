@@ -15618,6 +15618,7 @@ impl Game<'_> {
             } else {
                 self.water_plane(camera)
             },
+            oblique: None,
             portals,
             title,
             sky_blocked: self.potions.effects.get("blindness").is_some()
@@ -20181,6 +20182,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         depth_far: 1000.0,
         underwater: false,
         water_plane: None,
+        oblique: None,
         portals: Vec::new(),
         cave_culling: false,
         title: true,

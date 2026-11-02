@@ -465,6 +465,7 @@ struct Chain {
 }
 
 /// What a frame asks for.
+#[derive(Clone)]
 pub struct Request<'a> {
     /// `GameRenderer.requestedPostEffects`, in order.
     pub effects: &'a [String],

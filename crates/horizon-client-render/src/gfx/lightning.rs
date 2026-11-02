@@ -12,7 +12,7 @@ pub struct Bolt {
     pub seed: i64,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Input<'a> {
     pub bolts: &'a [Bolt],
     /// Current atlas white texel ([`white_uv`]); a changed rect invalidates

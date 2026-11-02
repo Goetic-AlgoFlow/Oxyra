@@ -125,6 +125,7 @@ pub fn cells(radius: i32) -> CellIter {
 
 /// Per-frame cloud inputs. Resources are immutable for the renderer's lifetime:
 /// resource-pack reloads replace the renderer and its cache together.
+#[derive(Clone)]
 pub struct Input<'a> {
     pub texture: &'a (u32, u32, Vec<bool>),
     pub uv: [f32; 2],

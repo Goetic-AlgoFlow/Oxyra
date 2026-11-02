@@ -408,6 +408,21 @@ impl FrameUniforms {
             0.05,
             frame.depth_far,
         );
+        // A portal view's cut, in the projection's near plane (Lengyel's oblique clipping): every
+        // program of the pack cuts there, and inverting this matrix still gives the right points.
+        let projection = match frame.oblique {
+            Some(plane) => {
+                let plane = view.inverse().transpose() * glam::Vec4::from_array(plane);
+                let corner = projection.inverse()
+                    * glam::Vec4::new(plane.x.signum(), plane.y.signum(), 1.0, 1.0);
+                let scaled = plane * (2.0 / plane.dot(corner));
+                let last = projection.row(3);
+                let mut m = projection.transpose();
+                m.z_axis = scaled - last;
+                m.transpose()
+            }
+            None => projection,
+        };
         let camera = frame.camera.as_vec3();
         let first_frame = self.previous.is_none();
         let (previous_exact, previous_view, previous_projection) =
@@ -956,6 +971,7 @@ mod initial_history_tests {
             shadow_cache: false,
             water_plane: None,
             portals: Vec::new(),
+            oblique: None,
             weather: &[],
             weather_time: crate::weather::Time::new(0, 0.0),
             camera: glam::DVec3::new(0.5, 100.0, 0.5),

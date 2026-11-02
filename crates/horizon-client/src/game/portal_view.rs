@@ -431,6 +431,18 @@ impl Game<'_> {
         }
     }
 
+    /// The dimension behind the nearest portal the window sees through, as packs number it.
+    pub(super) fn portal_view_dimension(&self) -> Option<i32> {
+        self.portal_entries
+            .iter()
+            .find(|e| e.parent.is_none())
+            .map(|e| match e.request.to {
+                Dim::Overworld => 0,
+                Dim::Nether => -1,
+                Dim::End => 1,
+            })
+    }
+
     /// Whether the crosshair leaves `state` unmarked: a portal the window sees through is no
     /// block to the eye (it can still be broken).
     pub(super) fn portal_outline_hidden(&self, state: BlockStateId) -> bool {
@@ -919,6 +931,11 @@ impl Game<'_> {
                 normal.dot(offset) as f32,
             ],
             opening: opening.map(|c| c + DVec3::X * east),
+            dimension: match view.request.to {
+                Dim::Overworld => 0,
+                Dim::Nether => -1,
+                Dim::End => 1,
+            },
             entry_light,
             fog: sky.fog_color,
             clear: if view.request.to == Dim::End {

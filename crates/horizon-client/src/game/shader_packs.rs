@@ -145,6 +145,53 @@ pub(super) struct PackIds {
 }
 
 impl Game<'_> {
+    /// The pack's programs for the level behind the nearest portal seen through, once.
+    // shortcut: compiled on the render thread, a hitch the first time a portal comes near.
+    fn load_view_pack(&mut self, path: &std::path::Path, name: &str) {
+        let Some(dimension) = self.portal_view_dimension() else {
+            return;
+        };
+        if !self.renderer.as_ref().is_some_and(|r| r.wants_view_pack(dimension)) {
+            return;
+        }
+        let started = std::time::Instant::now();
+        let pack = match Pack::open(path).map(|p| p.with_chosen(chosen_shader_options(name))) {
+            Ok(pack) => pack,
+            Err(e) => {
+                log::warn!("shader pack {name}: {e}");
+                return;
+            }
+        };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let mut macros = Macros::standard();
+        renderer.define_pack_macros(&mut macros);
+        let (properties, _) = horizon_shaders::read_properties(&pack, &mut macros);
+        let folder = dimension_folder(&pack, dimension);
+        let inputs = renderer.pack_inputs();
+        let mut post = load_post(&pack, &folder, &properties, &macros, &inputs);
+        let resources = self.options.resources.clone();
+        let read = |namespace: &str, path: &str| {
+            std::fs::read(resources.join("assets").join(namespace).join(path)).ok()
+        };
+        horizon_shaders::resolve_resources(&mut post.textures, &read);
+        let biomes = world_biomes!(self);
+        let names: Vec<&str> = biomes.list.iter().map(|b| b.name.as_str()).collect();
+        post.custom.set_biomes(&names);
+        let text = pack.read_text("block.properties").unwrap_or_default();
+        let ids = BlockIds::parse(&Properties::parse(&text, &macros));
+        let table = terrain_table(
+            &block_id_table(&self.pack, &ids),
+            &block_emission_table(&self.pack),
+        );
+        renderer.set_view_pack(dimension, post, &table);
+        log::info!(
+            "shader pack {name}: folder `{folder}` for the portal views in {} ms",
+            started.elapsed().as_millis()
+        );
+    }
+
     /// Loads the pack for the current dimension when it changed, and returns this frame's
     /// inputs to the pack's uniforms.
     pub(super) fn shader_pack_inputs(
@@ -185,6 +232,7 @@ impl Game<'_> {
             Dim::End => 1,
         };
         let path = Self::shader_packs_dir().join(&name);
+        self.load_view_pack(&path, &name);
         if horizon_shader_api::package::is_pack(&path) {
             // One of Horizon's own packs (game/native_shaders.rs).
             self.tick_native_shader_pack(&path);

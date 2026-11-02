@@ -399,6 +399,8 @@ pub struct PortalView {
     /// The entry portal's opening: its corners in the renderer's coordinates of the level it is
     /// in, in order around it, on the far face of its frame.
     pub opening: [DVec3; 4],
+    /// The level behind's dimension as shader packs number it (0, -1, 1).
+    pub dimension: i32,
     /// The stored light in the entry portal (`World::light`: sky << 4 | block), which the view
     /// starts from at the exit's plane.
     pub entry_light: u8,
@@ -424,6 +426,10 @@ struct PortalSlot {
     target: Option<MirrorTarget>,
     opening: wgpu::Buffer,
     opening_group: Option<wgpu::BindGroup>,
+    /// Where a shader pack finished this view, and the opening's group showing it, when this
+    /// frame's pack ran for it.
+    pack_output: Option<(wgpu::TextureView, wgpu::BindGroup)>,
+    pack_ran: bool,
     /// Its entities: their globals (the view's, moved to their origin), group and vertices, and
     /// which list those vertices hold.
     entity_globals: wgpu::Buffer,
@@ -678,7 +684,11 @@ impl ShrinkGate {
         left == COMPACT_BUDGET && self.0.is_none_or(|at| now >= at)
     }
 }
+#[derive(Clone)]
 pub struct Frame<'a> {
+    /// A portal view's cut as a shader pack sees it (`pack_uniforms`): the exit's plane relative
+    /// to `camera`. None in the window's frame.
+    pub oblique: Option<[f32; 4]>,
     pub camera: DVec3,
     pub yaw: f32,
     pub pitch: f32,
@@ -968,6 +978,8 @@ pub struct Renderer {
     solid_portal: wgpu::RenderPipeline,
     translucent_portal: wgpu::RenderPipeline,
     portal_slots: Vec<PortalSlot>,
+    /// The shader pack's programs for the levels seen through portals, by dimension.
+    view_packs: std::cell::RefCell<Vec<(i32, pack_post::PackPost)>>,
     portal_opening: wgpu::RenderPipeline,
     portal_opening_bindings: wgpu::BindGroupLayout,
     entity_pipeline: wgpu::RenderPipeline,
@@ -3900,6 +3912,8 @@ impl Renderer {
                         mapped_at_creation: false,
                     }),
                     opening_group: None,
+                    pack_output: None,
+                    pack_ran: false,
                     entity_globals,
                     entity_group,
                     entity_buffer: None,
@@ -4272,6 +4286,7 @@ impl Renderer {
             solid_portal,
             translucent_portal,
             portal_slots,
+            view_packs: Default::default(),
             portal_opening,
             portal_opening_bindings,
             entity_pipeline,
@@ -5004,10 +5019,154 @@ impl Renderer {
             if frame.portals[i].parent.is_none()
                 && let Some(group) = &self.portal_slots[slot].opening_group
             {
+                let holder = &self.portal_slots[slot];
+                let group = holder
+                    .pack_output
+                    .as_ref()
+                    .filter(|_| holder.pack_ran)
+                    .map_or(group, |(_, g)| g);
                 pass.set_bind_group(0, group, &[]);
                 pass.draw(0..6, 0..1);
             }
         }
+    }
+    /// Runs the shader pack for a portal view: its gbuffers over the view's terrain, from the
+    /// carried camera, its deferred and composite programs, into the view's own output.
+    // shortcut: the pack's shadow map holds nothing for the level behind, and the portals seen in
+    // this view don't show in it.
+    fn run_view_pack(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Frame,
+        slot: usize,
+        p: &PortalView,
+        size: [u32; 2],
+    ) {
+        let at = self.view_packs.borrow().iter().position(|(d, _)| *d == p.dimension);
+        let Some(at) = at else {
+            return;
+        };
+        let (dimension, mut post) = self.view_packs.borrow_mut().swap_remove(at);
+        let beyond = (p.camera.x / (f64::from(PORTAL_X) * 16.0)).round() * f64::from(PORTAL_X) * 16.0;
+        let mut view = frame.clone();
+        view.portals = Vec::new();
+        view.camera = p.camera - DVec3::X * beyond;
+        view.eye = view.camera;
+        view.yaw = frame.yaw + p.yaw.to_degrees();
+        view.eye_rotation = [view.yaw, frame.pitch];
+        view.sky = p.sky;
+        view.hand = &[];
+        view.weather = &[];
+        view.water_plane = None;
+        view.shadow_cache = false;
+        view.oblique = Some(p.clip);
+        let mut inputs = frame.pack;
+        (inputs.has_skylight, inputs.has_ceiling) = (p.dimension == 0, p.dimension == -1);
+        (inputs.min_y, inputs.height, inputs.logical_height) = if p.dimension == 0 {
+            (-64, 384, 384)
+        } else {
+            (0, 256, 256)
+        };
+        post.set_clouds(None);
+        post.set_weather(None);
+        let holder = &self.portal_slots[slot];
+        let solid = holder.solid;
+        let translucent = holder.translucent;
+        if let (Some(target), Some((output, _))) = (&holder.target, &holder.pack_output) {
+            let mut terrain = |rp: &mut wgpu::RenderPass<'_>,
+                               list: pack_post::TerrainList,
+                               _page: &dyn Fn(&mut wgpu::RenderPass<'_>, u32),
+                               geometry: Option<(u32, &wgpu::BindGroupLayout)>| {
+                use pack_post::TerrainList as L;
+                if geometry.is_some() {
+                    return;
+                }
+                let (first, count) = match list {
+                    L::Solid => solid,
+                    L::Translucent => translucent,
+                    L::ShadowSolid | L::ShadowTranslucent => return,
+                };
+                rp.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                rp.set_vertex_buffer(1, self.instances.slice(..));
+                self.draw_sections(rp, &self.indirect, 0, first, count);
+            };
+            post.run(
+                &self.device,
+                &self.queue,
+                encoder,
+                &target.color,
+                &target.depth,
+                output,
+                &view,
+                &inputs,
+                size,
+                [self.config.width, self.config.height],
+                &[],
+                &mut terrain,
+            );
+        }
+        post.flush_uniforms(&self.queue);
+        self.view_packs.borrow_mut().push((dimension, post));
+    }
+    /// Whether the shader pack's programs for `dimension` wait to be loaded for the portal views.
+    pub fn wants_view_pack(&self, dimension: i32) -> bool {
+        // shortcut: unfinished (the opening shows only fog), so views stay classic under a pack
+        // without this, until the pack's terrain draws in them.
+        std::env::var_os("HORIZON_VIEW_PACK").is_some()
+            && self.pack_post.as_ref().is_some_and(|p| p.1.is_some())
+            && self.pack_post.as_ref().map(|p| p.0) != Some(dimension)
+            && !self.view_packs.borrow().iter().any(|(d, _)| *d == dimension)
+    }
+    /// The shader pack's programs for a level seen through portals: drawn as a section list, not
+    /// flat, since the view's draws are those.
+    pub fn set_view_pack(&mut self, dimension: i32, pack: horizon_shaders::Post, block_ids: &[i32]) {
+        let instance = wgpu::vertex_attr_array![5=>Float32x4];
+        let vertex = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TerrainVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &TERRAIN_ATTRIBUTES,
+        };
+        let instances = wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &instance,
+        };
+        let buffers = [Some(vertex), Some(instances)];
+        let world = pack_post::World {
+            atlas: self.pack_atlas.as_ref().map(|a| (a.view.clone(), a.size())),
+            lightmap: self.lightmap_view.clone(),
+            gui_size: self
+                .hud
+                .atlas_texture
+                .as_ref()
+                .map_or([1, 1], |t| [t.width(), t.height()]),
+            terrain: self.pack_atlas.as_ref().map(|_| pack_post::Geometry {
+                buffers: &buffers,
+                table: None,
+                depth_write: true,
+                atlas: None,
+                ids: None,
+                cull: true,
+            }),
+            block_ids,
+            celestial: self
+                .hud
+                .atlas_texture
+                .as_ref()
+                .map(|t| t.create_view(&Default::default())),
+            clouds: Some(&self.cloud_bindings),
+            weather: true,
+            hand: true,
+        };
+        let post = pack_post::PackPost::new(
+            &self.device,
+            &self.queue,
+            &self.adapter,
+            pack,
+            self.config.format.remove_srgb_suffix(),
+            world,
+        );
+        self.view_packs.borrow_mut().push((dimension, post));
     }
     fn draw_sections(
         &self,
@@ -5863,6 +6022,7 @@ impl Renderer {
     }
     /// Drops the running shader pack, of either kind.
     pub fn drop_shader_packs(&mut self) {
+        self.view_packs.borrow_mut().clear();
         self.pack_post = None;
         self.native = None;
         self.pack_atlas = None;
@@ -8452,9 +8612,32 @@ impl Renderer {
                     let depth = target(
                         "Portal view depth",
                         wgpu::TextureFormat::Depth32Float,
-                        wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_SRC,
                     );
+                    let output = target(
+                        "Portal view through the shader pack",
+                        self.config.format.remove_srgb_suffix(),
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                    );
+                    let output_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Portal opening resources (pack)"),
+                        layout: &self.portal_opening_bindings,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: self.portal_slots[slot].opening.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&output),
+                            },
+                        ],
+                    });
                     let holder = &mut self.portal_slots[slot];
+                    holder.pack_output = Some((output, output_group));
                     holder.opening_group = Some(group);
                     holder.target = Some(MirrorTarget { size, color, depth });
                 }
@@ -8583,6 +8766,14 @@ impl Renderer {
                     ],
                     ..portal_globals
                 };
+                // Under a shader pack, the nearest view with its programs loaded goes through them.
+                let packed = pack_post
+                    && p.parent.is_none()
+                    && !active_portals[..slot]
+                        .iter()
+                        .any(|&q| frame.portals[q].parent.is_none())
+                    && self.view_packs.borrow().iter().any(|(d, _)| *d == p.dimension);
+                self.portal_slots[slot].pack_ran = packed;
                 let holder = &self.portal_slots[slot];
                 self.uploads.buffer(
                     &mut encoder,
@@ -8636,13 +8827,15 @@ impl Renderer {
                 pass.set_pipeline(&self.solid_portal);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.set_vertex_buffer(1, self.instances.slice(..));
-                self.draw_sections(
-                    &mut pass,
-                    &self.indirect,
-                    0,
-                    holder.solid.0,
-                    holder.solid.1,
-                );
+                if !packed {
+                    self.draw_sections(
+                        &mut pass,
+                        &self.indirect,
+                        0,
+                        holder.solid.0,
+                        holder.solid.1,
+                    );
+                }
                 for &child in &children {
                     if let Some(group) = &self.portal_slots[child].opening_group {
                         pass.set_pipeline(&self.portal_opening);
@@ -8661,13 +8854,19 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &holder.group, &[]);
                 pass.set_pipeline(&self.translucent_portal);
-                self.draw_sections(
-                    &mut pass,
-                    &self.indirect,
-                    0,
-                    holder.translucent.0,
-                    holder.translucent.1,
-                );
+                if !packed {
+                    self.draw_sections(
+                        &mut pass,
+                        &self.indirect,
+                        0,
+                        holder.translucent.0,
+                        holder.translucent.1,
+                    );
+                }
+                drop(pass);
+                if packed {
+                    self.run_view_pack(&mut encoder, frame, slot, p, size);
+                }
             }
         }
         if let Some(native) = &mut self.native {
