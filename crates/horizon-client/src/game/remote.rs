@@ -5036,9 +5036,25 @@ impl Game<'_> {
     /// `PlayerInfo.getSkin` for every player entity, including NPCs that are
     /// never in the tab list: resolve each profile's textures and give the
     /// level's player models their skin.
-    /// The skin of a player in a level seen through a portal: known to this client by the
-    /// player list, downloaded as if it were in this level (a negative id matches no entity).
-    pub(super) fn foreign_player_skin(&mut self, id: u32, uuid: u128) -> (String, bool) {
+    /// The mob of a player in a level seen through a portal, with its skin: known to this client
+    /// by the player list, downloaded as if it were in this level (a negative id matches no entity).
+    pub(super) fn foreign_player_mob(
+        &mut self,
+        p: &super::portal_view::PortalPlayer,
+    ) -> Option<horizon_client::mobs::Mob> {
+        let kind = self.remote.as_ref()?.player_type.clone()?;
+        let mut mob = horizon_client::mobs::Mob::new(p.id, kind, p.position, p.head_yaw);
+        super::remote_mob_data::client_defaults(&mut mob);
+        mob.previous = p.previous;
+        (mob.yaw, mob.previous_yaw) = (p.yaw, p.yaw);
+        (mob.head_pitch, mob.previous_head_pitch) = (p.pitch, p.pitch);
+        let (skin, slim) = self.foreign_player_skin(p.id, p.uuid);
+        mob.skin = Some(skin);
+        mob.slim = slim;
+        Some(mob)
+    }
+
+    fn foreign_player_skin(&mut self, id: u32, uuid: u128) -> (String, bool) {
         let known = self.remote.as_mut().and_then(|r| {
             r.level_players.insert(-1 - id as i32, uuid);
             r.skins.get(&uuid).map(|s| (s.clone(), r.slim_skins.contains(&uuid)))

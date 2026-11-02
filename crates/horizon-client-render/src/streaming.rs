@@ -1556,6 +1556,7 @@ impl Streaming {
                         translucent_layers: self.translucent_layers.clone(),
                         leaf_culling: self.leaf_culling,
                         hidden_blocks: self.hidden_blocks.clone(),
+                        separate_ao: self.separate_ao,
                     },
                 ),
             );

@@ -2947,7 +2947,7 @@ impl Game<'_> {
             (batch.width, batch.height),
             [min_width, image_h + after_text],
         );
-        Self::tooltip_box(batch, atlas, x, y, w, h);
+        self.tooltip_box(batch, Some(stack), x, y, w, h);
         let shift = inside.map_or(0.0, |w| w.h + 4.0);
         for (i, (text, color)) in lines.iter().enumerate() {
             let ty = if i == 0 {
@@ -3034,7 +3034,7 @@ impl Game<'_> {
             let tint = grid.tint.unwrap_or(0xFF_FFFF);
             tooltip_window(batch, &self.gui.atlas, x, y, window.w, window.h, tint);
         } else if window.position != TooltipItemsPosition::Inside {
-            Self::tooltip_box(batch, &self.gui.atlas, x, y, window.w, window.h);
+            self.tooltip_box(batch, None, x, y, window.w, window.h);
         }
         let n = grid.slots.len();
         let active = grid.active.unwrap_or(n).min(n);
@@ -3154,7 +3154,7 @@ impl Game<'_> {
         if py + 8.0 + 3.0 > batch.height {
             py = batch.height - 8.0 - 3.0;
         }
-        Self::tooltip_box(batch, atlas, px, py, tw, 8.0);
+        self.tooltip_box(batch, None, px, py, tw, 8.0);
         Self::tooltip_text(batch, atlas, &lines, px, py);
     }
     /// `ClientBundleTooltip.extractImage`: the slots, the count past them and

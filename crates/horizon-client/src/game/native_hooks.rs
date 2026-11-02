@@ -6,6 +6,13 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 360 adds Oxyra's own points: world geometry beside the particles (`native_world_quads`),
+//! a Mods button (`native_mods_button`), inventory controls (`native_mouse_tweaks`), the portal
+//! view, its effects and outline (`native_portal_view`, `native_portal_effects`,
+//! `native_portal_outline`), the pause icons (`native_pause_icons`), the F3 text
+//! (`native_debug_overlay`), text fields in a mod's page (`native_settings_text`), a tooltip's grid
+//! (`native_tooltip_items`) and the helpers they use.
+//!
 //! API 359 adds a living entity jumping (`native_living_jump`).
 //!
 //! API 358 adds a living entity healing, with a changeable amount and cancellation (`native_living_heal`).
@@ -1046,7 +1053,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 359;
+pub(crate) const NATIVE_HOOKS_API: u32 = 360;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -9503,6 +9510,220 @@ fn mod_screen_opens(
         return Some(false);
     }
     None
+}
+
+/// Items in a stack's tooltip (`native_tooltip_items`), drawn as ShulkerBoxTooltip draws its
+/// preview: a grid `columns` wide, slot by slot, an empty one drawn as an empty slot. With no
+/// slots it only leaves out the contents' text lines.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NativeTooltipItems {
+    pub(crate) columns: u32,
+    pub(crate) slots: Vec<Option<ItemStack>>,
+    /// The colour (`0xRRGGBB`) the window is multiplied by (a dyed shulker box's), `None` for
+    /// none (white).
+    pub(crate) tint: Option<u32>,
+    pub(crate) theme: TooltipItemsTheme,
+    pub(crate) position: TooltipItemsPosition,
+    /// Counts of a thousand and more as `1.2k` (`ShulkerBoxTooltipUtil.abbreviateInteger`).
+    pub(crate) short_counts: bool,
+    /// Keeps the tooltip where it is while held, and its slot hovered, so the mouse can go over
+    /// the grid and show an item's own tooltip. Only a slot's tooltip locks.
+    pub(crate) lock: bool,
+    /// The slots past the first `active` are dimmed (`ModPreviewRenderer.drawInactiveSlots`:
+    /// a bundle's room left) and left empty; `None` for all active. API 86.
+    pub(crate) active: Option<usize>,
+    /// The slot highlighted whatever the mouse does, its item's name over the tooltip (a
+    /// bundle's selected item). API 86.
+    pub(crate) selected: Option<usize>,
+    /// Leaves out the stack's lore lines.
+    pub(crate) hide_lore: bool,
+    /// Lines added at the end of the tooltip (`getTooltipLines`' return), each with a colour as
+    /// `rgba` packs it (`u32::MAX` keeps the text's own).
+    pub(crate) lines: Vec<(Text, u32)>,
+}
+
+/// The F3 overlay's text as a mod draws it (`native_debug_overlay`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NativeDebugOverlay {
+    pub(crate) left: Vec<Text>,
+    pub(crate) right: Vec<Text>,
+    /// Each line's background, ARGB (0x90505050 is the overlay's own).
+    pub(crate) background: u32,
+    pub(crate) shadow: bool,
+    /// The text's size, 1 for the overlay's own.
+    pub(crate) scale: f32,
+    /// How far both columns are pushed out towards their side, in GUI pixels: an animation.
+    pub(crate) offset: i32,
+    /// The scoreboard's sidebar and the boss bars are left out while it shows.
+    pub(crate) hide_sidebar: bool,
+    pub(crate) hide_bossbar: bool,
+}
+
+/// How a tooltip's grid (`NativeTooltipItems`) looks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TooltipItemsTheme {
+    /// A container's window: the inventory panel's 7 pixel frame around 18 pixel slots.
+    #[default]
+    Window,
+    /// The bundle tooltip's 24 pixel slots (`ClientBundleTooltip`), centred.
+    Bundle,
+}
+
+/// Where a tooltip's grid (`NativeTooltipItems`) goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TooltipItemsPosition {
+    /// In the tooltip, under the name, as vanilla places a tooltip image.
+    #[default]
+    Inside,
+    /// Out of the tooltip, under it or over it when there is no room under it.
+    Outside,
+    OutsideTop,
+    OutsideBottom,
+}
+
+
+impl Game<'_> {
+    /// The world's own quads drawn with the particles (their atlas, `ParticleEngine::sprite`, and
+    /// their blending): push four camera-relative vertices per quad. `partial` is the frame's
+    /// part of a tick. API 81.
+    pub(super) fn native_world_quads(
+        &mut self,
+        camera: glam::DVec3,
+        partial: f32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        let _ = (camera, partial, out);
+    }
+    /// A way into Options > Mods (`count` rows there): set `label` (`Mods (12)`) to show a
+    /// button that opens it on the title screen, beside Realms, and on the pause menu, a row
+    /// of its own while the server offers no links there. API 82.
+    pub(super) fn native_mods_button(&self, count: usize, label: &mut Option<String>) {
+        let _ = (count, label);
+    }
+    /// The inventory's Mouse Tweaks controls (`game/tweaks.rs`: the drags) and its wheel,
+    /// as the Extras options set them: change them while your mod runs. Nothing is saved, so
+    /// the options are back once the mod is off. API 83.
+    pub(super) fn native_mouse_tweaks(&self, controls: &mut bool, wheel: &mut bool) {
+        let _ = (controls, wheel);
+    }
+    /// The portal view (`game/portal_view.rs`), off unless a mod turns it on, asked each tick:
+    /// `view` shows the level behind the Nether or End portal near the player through it, where
+    /// this game holds the world (single player, a LAN host); `crossing` then takes that level
+    /// over on the way through, with no loading screen, landing where the view showed. API 88.
+    pub(super) fn native_portal_view(&self, view: &mut bool, crossing: &mut bool) {
+        let _ = (view, crossing);
+    }
+    /// The pause menu's icons a mod leaves shown, in their order: report bugs, give feedback,
+    /// play with friends, player reporting. Set one to false to hide it: the others stay
+    /// centred, and a hidden one can't be clicked or focused. API 89.
+    pub(super) fn native_pause_icons(&self, shown: &mut [bool; 4]) {
+        let _ = shown;
+    }
+    /// A Nether portal's particles and ambient sound (`Animate::NetherPortal`): set either to
+    /// false to turn it off. API 90.
+    pub(super) fn native_portal_effects(&self, particles: &mut bool, sound: &mut bool) {
+        let _ = (particles, sound);
+    }
+    /// Whether a portal the window sees through keeps its block outline: set to true to keep
+    /// it. API 91.
+    pub(super) fn native_portal_outline(&self, outline: &mut bool) {
+        let _ = outline;
+    }
+    /// The Nether portal effects shown this tick (`native_portal_effects`).
+    pub(super) fn portal_effects(&self) -> (bool, bool) {
+        let (mut particles, mut sound) = (true, true);
+        self.native_portal_effects(&mut particles, &mut sound);
+        (particles, sound)
+    }
+    /// The pause menu's icons shown this frame (`native_pause_icons`).
+    pub(super) fn pause_icons_shown(&self) -> [bool; 4] {
+        let mut shown = [true; 4];
+        self.native_pause_icons(&mut shown);
+        shown
+    }
+    /// The F3 overlay's text, drawn the mod's way: `entries` are every debug entry's lines
+    /// (`DebugScreenEntries`, by id, enabled or not); `open` is false on the frames after the
+    /// overlay closed for as long as the last answer was `Some` (a closing animation);
+    /// `reduced` is `reducedDebugInfo`. Set `overlay` to draw its columns in place of the
+    /// entries'; the charts stay. API 87.
+    pub(super) fn native_debug_overlay(
+        &self,
+        open: bool,
+        reduced: bool,
+        entries: &[(&'static str, Vec<String>)],
+        overlay: &mut Option<NativeDebugOverlay>,
+    ) {
+        let _ = (open, reduced, entries, overlay);
+    }
+    /// Text field `button` of mod `mod_id`'s settings page was confirmed (Enter) holding
+    /// `text`. A label `caption\u{1}value` is a text field showing `value` (a `#rrggbb` one
+    /// with a square of that colour), `\u{2}text` a heading. API 86.
+    pub(super) fn native_settings_text(&mut self, mod_id: &str, button: usize, text: &str) {
+        let _ = (mod_id, button, text);
+    }
+    /// Items to show in `stack`'s tooltip (a shulker box's contents...): set `items` when it is
+    /// none yet. `lockable` when the tooltip is a slot's, in a screen with slots. Asked each frame
+    /// the tooltip shows, while its lines are built and again to draw it; items with slots stand
+    /// for a bundle's own grid. With items, the contents' text lines (`ItemContainerContents`, "Cobblestone x 64")
+    /// are left out. API 84; the theme, position, lock and lines API 85.
+    pub(super) fn native_tooltip_items(
+        &self,
+        stack: &ItemStack,
+        lockable: bool,
+        items: &mut Option<NativeTooltipItems>,
+    ) {
+        let _ = (stack, lockable, items);
+    }
+    /// Whether key `key` (`key.keyboard.left.shift`) is held now, as `InputConstants.isKeyDown`
+    /// answers. API 85.
+    pub(super) fn native_key_down(&self, key: &str) -> bool {
+        keybinds::key_code(key).is_some_and(|k| self.keys.contains(&k))
+    }
+    /// Key `key`'s label (`InputConstants.Key.getDisplayName`: "Left Shift"), in the game's
+    /// language. API 85.
+    pub(super) fn native_key_name(&self, key: &str) -> String {
+        keybinds::display_name(key).plain()
+    }
+    /// The open chest-like menu (`ChestMenu`, an ender chest's too): its title as the screen
+    /// shows it and its slots, as the player sees them. API 86.
+    pub(super) fn native_chest_menu(&mut self) -> Option<(String, Vec<Option<ItemStack>>)> {
+        let rows = self.chest_rows()?;
+        let title = self.chest_title(rows).plain();
+        Some((
+            title,
+            (0..rows * 9).map(|i| self.slot_view(300 + i)).collect(),
+        ))
+    }
+    /// `key` in the game's language, else `fallback`. API 86.
+    pub(super) fn native_translate(&self, key: &str, fallback: &str) -> String {
+        self.translate(key, fallback)
+    }
+    /// The server's address while playing on one (not the game's own world). API 86.
+    pub(super) fn native_server_address(&self) -> Option<String> {
+        self.server_address().map(str::to_owned)
+    }
+    /// The game's language (`en_us`, `fr_fr`). API 85.
+    pub(super) fn native_language(&self) -> String {
+        self.settings.language.clone()
+    }
+    /// The player's ender chest, where this game holds the world (single player, or the
+    /// host of a LAN world); `None` on a server. API 85.
+    pub(super) fn native_ender_items(&self) -> Option<Vec<Option<ItemStack>>> {
+        (self.lan.is_some() || self.has_singleplayer_server()).then(|| {
+            let mut items = self.ender_items.clone();
+            items.resize(27, None);
+            items
+        })
+    }
+    /// Text field `button` of native mod `i`'s page confirmed with `text`, and the page's
+    /// labels after it.
+    pub(super) fn native_settings_text_event(&mut self, i: usize, button: usize, text: &str) {
+        let Some(id) = self.settings.mods.installed.get(i).map(|m| m.id.clone()) else {
+            return;
+        };
+        self.native_settings_text(&id, button, text);
+        self.native_settings_refresh(i);
+    }
 }
 
 #[cfg(test)]

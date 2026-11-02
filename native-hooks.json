@@ -455,6 +455,56 @@
   ],
   "hooks": [
     {
+      "name": "world_quads",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_world_quads"
+    },
+    {
+      "name": "mods_button",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_mods_button"
+    },
+    {
+      "name": "mouse_tweaks",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_mouse_tweaks"
+    },
+    {
+      "name": "portal_outline",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_portal_outline"
+    },
+    {
+      "name": "portal_effects",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_portal_effects"
+    },
+    {
+      "name": "pause_icons",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_pause_icons"
+    },
+    {
+      "name": "portal_view",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_portal_view"
+    },
+    {
+      "name": "tooltip_items",
+      "version": 2,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip_items"
+    },
+    {
+      "name": "settings_text",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_text"
+    },
+    {
+      "name": "debug_overlay",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_debug_overlay"
+    },
+    {
       "name": "frame",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_frame",

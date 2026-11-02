@@ -102,8 +102,20 @@ pub(super) struct PortalEntities {
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
     boats: Vec<super::boats::Boat>,
     carts: Vec<super::minecarts::Minecart>,
-    /// The players among `mobs`: entity id and profile, for their skins.
-    players: Vec<(u32, u128)>,
+    /// The LAN players in the level: the window makes their mobs, the server has none.
+    players: Vec<PortalPlayer>,
+}
+
+/// A LAN player in a level behind a portal.
+#[derive(Clone, Copy)]
+pub(super) struct PortalPlayer {
+    pub(super) id: u32,
+    pub(super) uuid: u128,
+    pub(super) position: Vec3,
+    pub(super) previous: Vec3,
+    pub(super) yaw: f32,
+    pub(super) pitch: f32,
+    pub(super) head_yaw: f32,
 }
 
 /// The server's last search for an exit: for which request, what it found and when.
@@ -999,18 +1011,24 @@ impl Game<'_> {
     /// The server's side: the entities of the level in place, and the players in it but the
     /// window's own.
     pub(super) fn portal_view_entities(&self, dim: Dim) -> Arc<PortalEntities> {
-        let mut mobs = self.mobs.clone();
+        let mobs = self.mobs.clone();
         let mut players = Vec::new();
         if let Some(host) = &self.lan {
-            for (conn, model) in &host.models {
-                if let Some(g) = host.hub.guest(*conn).filter(|g| {
-                    g.placed
-                        && g.dimension == dim.id()
-                        && host.owner.as_ref().is_none_or(|o| o.uuid != g.uuid)
-                }) {
-                    players.push((model.id, g.uuid));
-                    mobs.push(model.clone());
-                }
+            for g in host.hub.guests.iter().filter(|g| {
+                g.placed
+                    && g.dimension == dim.id()
+                    && host.owner.as_ref().is_none_or(|o| o.uuid != g.uuid)
+            }) {
+                let at = |p: [f64; 3]| Vec3::new(p[0], p[1], p[2]);
+                players.push(PortalPlayer {
+                    id: g.entity_id as u32,
+                    uuid: g.uuid,
+                    position: at(g.position),
+                    previous: at(g.previous_position),
+                    yaw: g.yaw,
+                    pitch: g.pitch,
+                    head_yaw: g.head_yaw,
+                });
             }
         }
         Arc::new(PortalEntities {
@@ -1050,12 +1068,9 @@ impl Game<'_> {
                 region.entities = (*view.entities).clone();
                 region.entities_from = Some(view.entities.clone());
                 let players = region.entities.players.clone();
-                for (id, uuid) in players {
-                    let (skin, slim) = self.foreign_player_skin(id, uuid);
-                    let region = &mut self.portal_meshes.regions[i];
-                    if let Some(m) = region.entities.mobs.iter_mut().find(|m| m.id == id) {
-                        m.skin = Some(skin);
-                        m.slim = slim;
+                for player in players {
+                    if let Some(mob) = self.foreign_player_mob(&player) {
+                        self.portal_meshes.regions[i].entities.mobs.push(mob);
                     }
                 }
                 let region = &mut self.portal_meshes.regions[i];
