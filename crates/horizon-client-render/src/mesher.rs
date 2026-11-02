@@ -1369,6 +1369,9 @@ pub struct Mesher<'a> {
     pub translucent_layers: &'a [bool],
     /// What the worker does with leaf faces inside a canopy.
     pub leaf_culling: LeafCullingMode,
+    /// Block states drawn elsewhere: portals seen through have no faces, in any pass, shadows
+    /// included.
+    pub hidden_blocks: &'a [u32],
 }
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
@@ -1446,7 +1449,7 @@ impl Mesher<'_> {
                         );
                         fluid::tesselate(self.tables, shade, pad, water, &mut out, [x, y, z]);
                     }
-                    if !state.model {
+                    if !state.model || self.hidden_blocks.contains(&id) {
                         continue;
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);

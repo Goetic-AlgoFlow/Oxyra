@@ -47,6 +47,9 @@ pub(super) struct Trip {
     /// The level the player left for another one: the mods are told they
     /// changed dimension when the trip ends (`tell_mods_changed_dimension`).
     pub(super) left: Option<Dim>,
+    /// Landed where the window's portal view showed (`Game::portal_view_landing`): it keeps
+    /// facing as it was.
+    carried: bool,
 }
 
 /// A vehicle a player rides: an animal, a boat or a minecart. It travels
@@ -330,7 +333,15 @@ impl Game<'_> {
         } else {
             "players_nether_portal_default_delay"
         };
-        let transition = self.ui.rules.int(rule).max(0);
+        // The window's own player, crossing a portal it sees through: at once.
+        let at_once = host.owner.as_ref().is_some_and(|o| {
+            host.hub.guest(conn).is_some_and(|g| g.uuid == o.uuid)
+        }) && self.portal_view_requests().iter().any(|r| r.crossing);
+        let transition = if at_once {
+            0
+        } else {
+            self.ui.rules.int(rule).max(0)
+        };
         let Some(entry) = self
             .portals
             .player
@@ -425,6 +436,7 @@ impl Game<'_> {
         let g = &host.hub.guests[i];
         let from = Vec3::new(g.position[0], g.position[1], g.position[2]);
         let yaw = g.yaw;
+        let g_uuid = g.uuid;
         // The vehicle the player rides travels with it: the player is its
         // passenger, and the vehicle is recreated in the other dimension,
         // where they ride it again (`Entity.teleportCrossDimension`). It
@@ -451,7 +463,14 @@ impl Game<'_> {
         } else {
             None
         };
-        let scaled = own
+        // Immersive Portals (`game/portal_view.rs`): the window's own player, seeing the End
+        // through the portal, lands where its view showed it.
+        let carried =
+            (end && target == Dim::End && host.owner.as_ref().is_some_and(|o| o.uuid == g_uuid))
+                .then(|| self.portal_view_landing(from))
+                .flatten();
+        let scaled = carried
+            .or(own)
             .or_else(|| self.end_destination(target))
             .unwrap_or(Vec3::new(from.x * scale, from.y, from.z * scale));
         self.end_portal_travel = false;
@@ -487,6 +506,7 @@ impl Game<'_> {
             finder: None,
             placed: false,
             left: Some(source),
+            carried: carried.is_some(),
         });
         if let Err(e) = self.enter_level(Some(host), source) {
             log::error!("could not reopen {}: {e}", source.id());
@@ -511,6 +531,7 @@ impl Game<'_> {
             finder: None,
             placed: false,
             left: None,
+            carried: false,
         });
     }
 
@@ -579,6 +600,7 @@ impl Game<'_> {
             finder: None,
             placed: false,
             left: None,
+            carried: false,
         });
     }
 
@@ -628,6 +650,7 @@ impl Game<'_> {
             finder: None,
             placed: false,
             left: None,
+            carried: false,
         });
     }
 
@@ -720,7 +743,7 @@ impl Game<'_> {
                     Ok(Some((at, turned))) => {
                         // EndPortalBlock.getPortalDestination: PLACE_PORTAL_TICKET.
                         self.place_portal_ticket(Self::chunk_of(at));
-                        (at, turned.unwrap_or(yaw))
+                        (at, turned.filter(|_| !trip.carried).unwrap_or(yaw))
                     }
                     Ok(None) => {
                         self.server_trips.insert(k, trip);
@@ -867,6 +890,7 @@ impl Game<'_> {
                 finder: None,
                 placed: true,
                 left: Some(source),
+                carried: false,
             });
             if let Err(e) = self.enter_level(Some(host), source) {
                 log::error!("could not reopen {}: {e}", source.id());

@@ -152,9 +152,9 @@ fn icon_active(icon: usize, friends: bool) -> bool {
         _ => false,
     }
 }
-fn pause_icon_focus_ids(friends: bool) -> Vec<u8> {
+fn pause_icon_focus_ids(friends: bool, shown: [bool; 4]) -> Vec<u8> {
     (0..4)
-        .filter(|&i| icon_active(i, friends))
+        .filter(|&i| shown[i] && icon_active(i, friends))
         .map(|i| if i == FRIENDS_ICON { 10 } else { 12 + i as u8 })
         .collect()
 }
@@ -166,15 +166,28 @@ fn pause_icons(
     additions: bool,
     split: bool,
     mods: bool,
+    shown: [bool; 4],
 ) -> [(f32, f32, &'static str); 4] {
     let (x0, y0) = pause_grid(w, h, u8::from(links || additions || mods) + u8::from(split));
     let (x0, y) = (x0 + 60.0, y0 + 98.0);
-    [
-        (x0, y, "gui/sprites/pause_menu/bug"),
-        (x0 + 24.0, y, "gui/sprites/pause_menu/social_interactions"),
-        (x0 + 48.0, y, "gui/sprites/friends/friends"),
-        (x0 + 72.0, y, "gui/sprites/pause_menu/player_reporting"),
-    ]
+    // The icons a mod leaves shown stay centred in the row (`native_pause_icons`); a hidden one
+    // is put out of reach.
+    let count = shown.iter().filter(|&&s| s).count();
+    let mut x = x0 + (4 - count) as f32 * 12.0;
+    let sprites = [
+        "gui/sprites/pause_menu/bug",
+        "gui/sprites/pause_menu/social_interactions",
+        "gui/sprites/friends/friends",
+        "gui/sprites/pause_menu/player_reporting",
+    ];
+    std::array::from_fn(|i| {
+        if shown[i] {
+            x += 24.0;
+            (x - 24.0, y, sprites[i])
+        } else {
+            (-1000.0, -1000.0, sprites[i])
+        }
+    })
 }
 /// DeathScreen.init: a hardcore player can only spectate.
 /// `DeathScreen.TitleConfirmScreen`: its title and the yes and no labels.
@@ -283,6 +296,7 @@ impl Game<'_> {
                 tooltip = Some(Text::translate("menu.custom_options.tooltip", &[]));
             }
         }
+        let shown = self.pause_icons_shown();
         for (i, (x, y, sprite)) in pause_icons(
             w,
             h,
@@ -290,10 +304,14 @@ impl Game<'_> {
             additions.is_some(),
             self.options.split_guest || self.split_hud.menu,
             mods.is_some(),
+            shown,
         )
         .into_iter()
         .enumerate()
         {
+            if !shown[i] {
+                continue;
+            }
             let active = icon_active(i, friends);
             let is_focused = (self.pause_focus == Some(10) && i == FRIENDS_ICON)
                 || (self.pause_focus == Some(12 + i as u8));
@@ -411,6 +429,7 @@ impl Game<'_> {
         let links = !self.server_links().is_empty();
         let additions = self.pause_screen_additions();
         let mods = self.mods_button().is_some();
+        let shown = self.pause_icons_shown();
         let icons = pause_icons(
             w,
             h,
@@ -418,6 +437,7 @@ impl Game<'_> {
             additions.is_some(),
             self.options.split_guest || self.split_hud.menu,
             mods,
+            shown,
         );
         let friends = icons[FRIENDS_ICON];
         let hit = pause_buttons(
@@ -436,11 +456,13 @@ impl Game<'_> {
             // The report bugs, feedback and player reporting icons (ids 12, 13 and 15).
             [0, 1, 3]
                 .into_iter()
+                .filter(|&i| shown[i])
                 .find(|&i| ui::hovered(self.cursor, icons[i].0, icons[i].1, 20.0, 20.0))
                 .map(|i| 12 + i as u8)
         })
         .or_else(|| {
             (self.friends_view().shown
+                && shown[FRIENDS_ICON]
                 && ui::hovered(self.cursor, friends.0, friends.1, 20.0, 20.0))
             .then_some(10)
         });
@@ -473,7 +495,7 @@ impl Game<'_> {
         );
         let mut active_ids: Vec<u8> = buttons.into_iter().filter(|b| b.5).map(|b| b.4).collect();
         let friends = self.friends_view().shown;
-        active_ids.extend(pause_icon_focus_ids(friends));
+        active_ids.extend(pause_icon_focus_ids(friends, self.pause_icons_shown()));
         if active_ids.is_empty() {
             return Ok(());
         }
@@ -526,6 +548,7 @@ impl Game<'_> {
                     .map(|b| (b.4, b.0, b.1, b.2))
                     .collect();
                 let friends = self.friends_view().shown;
+                let shown = self.pause_icons_shown();
                 for (i, (x, y, _)) in pause_icons(
                     w,
                     h,
@@ -533,11 +556,12 @@ impl Game<'_> {
                     self.pause_screen_additions().is_some(),
                     self.options.split_guest || self.split_hud.menu,
                     mods,
+                    shown,
                 )
                 .into_iter()
                 .enumerate()
                 {
-                    if icon_active(i, friends) {
+                    if shown[i] && icon_active(i, friends) {
                         let id = if i == FRIENDS_ICON { 10 } else { 12 + i as u8 };
                         rects.push((id, x, y, 20.0));
                     }
@@ -912,8 +936,12 @@ mod tests {
 
     #[test]
     fn pause_keyboard_focus_includes_the_active_icon_buttons() {
-        assert_eq!(pause_icon_focus_ids(false), [12, 13, 15]);
-        assert_eq!(pause_icon_focus_ids(true), [12, 13, 10, 15]);
+        assert_eq!(pause_icon_focus_ids(false, [true; 4]), [12, 13, 15]);
+        assert_eq!(pause_icon_focus_ids(true, [true; 4]), [12, 13, 10, 15]);
+        assert_eq!(
+            pause_icon_focus_ids(true, [false, false, true, false]),
+            [10]
+        );
     }
 
     #[test]
@@ -925,7 +953,19 @@ mod tests {
         assert_eq!(links.3, "menu.server_links");
         assert!(links.5);
         // The icon row sits above it; Options and Disconnect move down 24.
-        let icons = pause_icons(427.0, 240.0, true, false, false, false);
+        let icons = pause_icons(427.0, 240.0, true, false, false, false, [true; 4]);
+        // Two icons left: centred where the middle two were.
+        let two = pause_icons(
+            427.0,
+            240.0,
+            true,
+            false,
+            false,
+            false,
+            [false, true, true, false],
+        );
+        assert_eq!((two[1].0, two[2].0), (icons[1].0, icons[2].0));
+        assert!(two[0].0 < 0.0 && two[3].0 < 0.0);
         let y0_icons = ((240.0f32 - 190.0) * 0.25).floor() + 98.0;
         assert_eq!(icons[0].1, y0_icons);
         assert!(links.1 > icons[0].1);
@@ -955,8 +995,8 @@ mod tests {
             assert_eq!(add.1, link.1);
         }
         assert_eq!(
-            pause_icons(427.0, 240.0, true, true, false, false)[0].1,
-            pause_icons(427.0, 240.0, true, false, false, false)[0].1
+            pause_icons(427.0, 240.0, true, true, false, false, [true; 4])[0].1,
+            pause_icons(427.0, 240.0, true, false, false, false, [true; 4])[0].1
         );
     }
     #[test]

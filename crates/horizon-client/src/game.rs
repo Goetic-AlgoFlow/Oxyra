@@ -251,6 +251,7 @@ mod pickups;
 mod piglins;
 mod piston_push;
 mod player_equip;
+mod portal_view;
 mod postprocess;
 mod potent_sulfur;
 mod potions;
@@ -2433,6 +2434,26 @@ struct Game<'a> {
     /// Whether a native mod drew the F3 overlay last frame (`native_debug_overlay`), with
     /// whether it hides the sidebar and the boss bars.
     debug_mod_overlay: std::cell::Cell<Option<(bool, bool)>>,
+    /// Every F3 entry's lines for a mod's overlay, and when they were read: read again at most
+    /// every `DEBUG_ENTRIES_EVERY`, not each frame.
+    debug_entries_cache: std::cell::RefCell<Option<(Instant, Vec<(&'static str, Vec<String>)>)>>,
+    /// The server's last searches for the exits of the portals the window sees through.
+    portal_exit_search: Vec<portal_view::ExitSearch>,
+    /// What the window last saw through portals, for the log: level, entry and exit corners,
+    /// chunks.
+    portal_view_seen: Vec<(Dim, [i32; 3], Option<[i32; 3]>, usize)>,
+    /// The portals the window sees through, near the player and in the views.
+    portal_entries: Vec<portal_view::PortalEntry>,
+    /// The portals too far to see through, drawn plain: their blocks have no faces.
+    portal_far: Vec<(horizon_world::level::portal_travel::FoundRectangle, bool)>,
+    /// The levels behind portals, meshed into the renderer past the world's border.
+    portal_meshes: portal_view::PortalMeshes,
+    /// What a native mod turned on of the portal view this tick: the view, the crossing
+    /// (`native_portal_view`).
+    portal_view_on: (bool, bool),
+    /// A portal crossed with the level behind it meshed: when, and the columns whose meshes
+    /// stand in until the server's chunks come (`Game::mesh_portal_view`).
+    portal_crossed: Option<(Instant, horizon_client::fast_hash::FxHashSet<(i32, i32)>)>,
     /// The glowing entities' silhouettes this frame (game/glowing.rs).
     glowing_vertices: std::cell::RefCell<Vec<Vertex>>,
     /// The shader pack's entity and block entity ids, while one draws entities.
@@ -15346,7 +15367,7 @@ impl Game<'_> {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
                     let mut canceled = false;
                     self.native_block_highlight(h.pos, state, alpha as f32, &mut canceled);
-                    !canceled
+                    !canceled && !self.portal_outline_hidden(state)
                 })
                 .map(|h| {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
@@ -15477,6 +15498,13 @@ impl Game<'_> {
             visible_static_block_entity_sections = visible_static_sections;
             static_block_entity_stats = static_stats;
         }
+        let (mut portals, plain) = if title {
+            Default::default()
+        } else {
+            self.portal_frames(camera)
+        };
+        self.portal_entity_vertices(&mut portals, alpha);
+        self.plain_portal_geometry(camera, &plain, &mut entities);
         let bolts = if title {
             Vec::new()
         } else {
@@ -15588,6 +15616,7 @@ impl Game<'_> {
             } else {
                 self.water_plane(camera)
             },
+            portals,
             title,
             sky_blocked: self.potions.effects.get("blindness").is_some()
                 || self.potions.effects.get("darkness").is_some()
@@ -16417,6 +16446,7 @@ impl Game<'_> {
         {
             log::warn!("Horizon: failed to save unloaded chunks: {e}");
         }
+        self.mesh_portal_view();
         let (far_distance, far_reduced) = self.far_terrain_choice();
         // Terrain still on its way from the server (single player's integrated one
         // too): the view's outermost columns not all in, or its events not all handled.
@@ -18424,6 +18454,14 @@ impl<'a> Game<'a> {
             tooltip_lock: Default::default(),
             tooltip_slot: Default::default(),
             debug_mod_overlay: Default::default(),
+            debug_entries_cache: Default::default(),
+            portal_exit_search: Default::default(),
+            portal_view_seen: Vec::new(),
+            portal_entries: Vec::new(),
+            portal_far: Vec::new(),
+            portal_meshes: Default::default(),
+            portal_view_on: (false, false),
+            portal_crossed: None,
             glowing_vertices: Default::default(),
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
@@ -20140,6 +20178,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         depth_far: 1000.0,
         underwater: false,
         water_plane: None,
+        portals: Vec::new(),
         cave_culling: false,
         title: true,
         sky_blocked: false,

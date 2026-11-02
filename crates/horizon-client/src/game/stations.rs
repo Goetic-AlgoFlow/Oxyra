@@ -2961,9 +2961,6 @@ impl Game<'_> {
         let mut hovered = None;
         if let (Some(grid), Some(window)) = (&grid, window) {
             let at = window.origin((x, y, w, h), self.cursor, (batch.width, batch.height));
-<<<<<<< HEAD
-            hovered = self.draw_tooltip_items(batch, grid, window, at);
-=======
             hovered = self.draw_tooltip_items(batch, grid, window, at, (x, y, w));
         }
         if probe.is_some()

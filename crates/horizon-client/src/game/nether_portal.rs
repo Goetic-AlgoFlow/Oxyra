@@ -375,7 +375,7 @@ impl Game<'_> {
     /// The nether portal blocks of the chunks within `radius` of `center`
     /// (the points of interest `PortalForcer` searches): loaded chunks as
     /// they are, the others as saved; chunks never generated have none.
-    fn portal_blocks(&self, center: BlockPos, radius: i32) -> Vec<BlockPos> {
+    pub(super) fn portal_blocks(&self, center: BlockPos, radius: i32) -> Vec<BlockPos> {
         let b = self.res.behaviours();
         let chunk_radius = radius.div_euclid(16) + 1;
         let (cx, cz) = (center.x >> 4, center.z >> 4);
@@ -559,7 +559,9 @@ impl Game<'_> {
     /// the chat and death screens and plays `block.portal.trigger` when the
     /// effect starts from nothing.
     pub(super) fn client_portal_effect(&mut self) -> bool {
-        if !std::mem::take(&mut self.portals.client_inside) {
+        // A portal the window sees through and crosses at once (`game/portal_view.rs`) is no
+        // passage: no swirl, no sound, screens stay.
+        if !std::mem::take(&mut self.portals.client_inside) || self.portal_view_on.1 {
             return false;
         }
         match self.screen {

@@ -40,6 +40,12 @@ struct Globals {
     // HDR lighting: x how strongly the sky lights the world now (`Sky::sky_light_factor`),
     // y what the sky and fog get: the same, but none under water.
     hdr_light: vec4<f32>,
+    // The portal view's cut (gfx.rs, `PortalView::clip`): a camera-relative plane; `height` is
+    // the distance from it when set, the camera-relative height otherwise.
+    clip: vec4<f32>,
+    // A portal view's light at the exit's plane (rgb, the entry's) and w: 1 / the blocks it takes
+    // to give way to the view's own (gfx.rs, `PORTAL_SEAM_BLOCKS`). Zero elsewhere.
+    portal_seam: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var sprites: texture_2d_array<f32>;
@@ -184,6 +190,8 @@ struct TerrainOut {
     // The camera-relative height, for the water mirror's cut at the plane.
     @location(9) height: f32,
     @location(10) @interpolate(flat) emissive_layer: u32,
+    // The lightmap's colour in `color`, which a portal view's seam replaces.
+    @location(12) lit: vec3<f32>,
 }
 // Whether a fading tile or section leaves this pixel out (gfx/lod.rs's
 // `fade_code`, `fade_out_code`). It fades in, or out, chunk by chunk: each
@@ -404,13 +412,15 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
         }
     }
     let block = max(f32(light.y), dynamic_block_light(pos));
-    out.color = vec4(color.rgb, 1.0) * sample_lightmap(f32(light.x) / 16.0, block / 16.0);
+    let lit = sample_lightmap(f32(light.x) / 16.0, block / 16.0);
+    out.lit = lit.rgb;
+    out.color = vec4(color.rgb, 1.0) * lit;
     out.scene = vec2(block / 16.0, f32(light.x) / 16.0);
     if globals.colored_count.x > 0u {
         out.color = vec4(min(out.color.rgb + color.rgb * native_colored_light(pos), vec3(1.0)), out.color.a);
     }
     out.emission = 15u - (u32(round(color.a * 255.0)) & 15u);
-    out.height = pos.y;
+    out.height = select(pos.y, dot(vec4(pos, 1.0), globals.clip), any(globals.clip != vec4(0.0)));
     out.spherical = length(pos);
     out.cylindrical = max(length(pos.xz), abs(pos.y));
     out.fade = fade_code(w);
@@ -458,7 +468,18 @@ fn hdr_mark(tier: u32, y: f32) -> f32 {
 // (`fog_ends.w`, camera-relative) would show above it in the mirror, so it is cut away.
 @fragment fn fs_solid_mirror(in: TerrainOut) -> @location(0) vec4<f32> {
     if in.height < globals.fog_ends.w { discard; }
-    return solid_color(in);
+    return solid_color(portal_seam(in));
+}
+// A portal view starts in the entry's light at the exit's plane, where the frame's half on this
+// side meets the half on the other, and takes the level behind's over a few blocks.
+fn portal_seam(in: TerrainOut) -> TerrainOut {
+    var out = in;
+    if globals.portal_seam.w != 0.0 {
+        let along = clamp(in.height * globals.portal_seam.w, 0.0, 1.0);
+        let light = mix(globals.portal_seam.rgb, in.lit, along);
+        out.color = vec4(in.color.rgb / max(in.lit, vec3(0.004)) * light, in.color.a);
+    }
+    return out;
 }
 fn solid_color(in: TerrainOut) -> vec4<f32> {
     let dx = dpdx(in.local);
@@ -527,6 +548,14 @@ fn solid_finish(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>) -> vec4<f32>
 // layer drawn first in front (gfx.rs's water tiers): dithered, the faded-out
 // pixels showed the layer behind through the one in front, twice the water.
 @fragment fn fs_translucent(in: TerrainOut) -> @location(0) vec4<f32> {
+    return translucent_color(in);
+}
+// The portal view's translucent terrain (gfx.rs): cut at the exit's plane, as `fs_solid_mirror`.
+@fragment fn fs_translucent_portal(in: TerrainOut) -> @location(0) vec4<f32> {
+    if in.height < globals.fog_ends.w { discard; }
+    return translucent_color(portal_seam(in));
+}
+fn translucent_color(in: TerrainOut) -> vec4<f32> {
     var color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
     color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
     if color.a < 0.01 { discard; }

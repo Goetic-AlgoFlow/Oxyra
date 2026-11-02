@@ -469,6 +469,7 @@ impl Game<'_> {
         };
         // Level.isThundering: a thunder level above 0.9 where the sky is open.
         let thundering = self.dim == Dim::Overworld && world.weather.levels(1.0).1 > 0.9;
+        let (portal_particles, portal_sound) = self.portal_effects();
         let ctx = AnimateContext {
             world,
             facts,
@@ -485,6 +486,8 @@ impl Game<'_> {
             gateway_particles: &gateway_particles,
             thundering,
             ultrawarm: self.dim == Dim::Nether,
+            portal_particles,
+            portal_sound,
         };
         if let Some(e) = eye {
             let block = [

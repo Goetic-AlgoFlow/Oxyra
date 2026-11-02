@@ -304,8 +304,22 @@ impl Game<'_> {
         // the mod still draws it (its closing animation).
         let mut native = None;
         if shown && (self.debug || self.debug_mod_overlay.get().is_some()) {
-            let entries = self.debug_entries_each(framebuffer);
-            self.native_debug_overlay(self.debug, reduced, &entries, &mut native);
+            // Every entry's lines (all of them, not only the enabled ones) cost a frame more than
+            // the text the mod draws: read again 20 times a second.
+            const DEBUG_ENTRIES_EVERY: std::time::Duration = std::time::Duration::from_millis(50);
+            let mut cache = self.debug_entries_cache.borrow_mut();
+            if cache
+                .as_ref()
+                .is_none_or(|(at, _)| at.elapsed() >= DEBUG_ENTRIES_EVERY)
+            {
+                *cache = Some((
+                    std::time::Instant::now(),
+                    self.debug_entries_each(framebuffer),
+                ));
+            }
+            if let Some((_, entries)) = cache.as_ref() {
+                self.native_debug_overlay(self.debug, reduced, entries, &mut native);
+            }
         }
         self.debug_mod_overlay
             .set(native.as_ref().map(|o| (o.hide_sidebar, o.hide_bossbar)));

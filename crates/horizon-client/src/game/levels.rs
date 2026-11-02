@@ -467,6 +467,7 @@ impl Game<'_> {
                 self.native_level_tick_post(dim.id());
             }
             self.publish_server_debug(dim);
+            self.publish_portal_view(dim);
             // An entity that crossed into a level that already ticked this
             // server tick is in it when the tick ends (`addDuringTeleport`).
             if running == Some(true) {
@@ -615,6 +616,8 @@ impl Game<'_> {
                     // A portal ticket keeps its dimension active
                     // (`TicketType.shouldKeepDimensionActive`).
                     || !self.portal_ticket_chunks(*d).is_empty()
+                    // The window sees into it through a portal (`game/portal_view.rs`).
+                    || self.portal_view_level(*d)
             })
             .collect();
         if dims.is_empty() {

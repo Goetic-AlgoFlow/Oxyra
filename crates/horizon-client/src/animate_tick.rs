@@ -463,6 +463,10 @@ pub struct AnimateContext<'a> {
     pub thundering: bool,
     /// The dimension has `water_evaporates` and drips lava from dripstone (the Nether).
     pub ultrawarm: bool,
+    /// A Nether portal's particles and ambient sound, unless a mod turned them off
+    /// (`native_portal_effects`).
+    pub portal_particles: bool,
+    pub portal_sound: bool,
 }
 
 /// `ClientLevel.getMarkerParticleTarget`: only the selected main-hand item counts.
@@ -963,7 +967,7 @@ fn block_animate_tick(
         }
         Animate::NetherPortal => {
             let r = engine.random();
-            if next_int(r, 100) == 0 {
+            if next_int(r, 100) == 0 && ctx.portal_sound {
                 let pitch = r.next_float() * 0.4 + 0.8;
                 sound(
                     engine,
@@ -975,7 +979,7 @@ fn block_animate_tick(
             }
             let along_z = ctx.state([pos[0] - 1, pos[1], pos[2]]) == state
                 || ctx.state([pos[0] + 1, pos[1], pos[2]]) == state;
-            for _ in 0..4 {
+            for _ in 0..if ctx.portal_particles { 4 } else { 0 } {
                 let r = engine.random();
                 let mut p = [
                     fx + r.next_double(),

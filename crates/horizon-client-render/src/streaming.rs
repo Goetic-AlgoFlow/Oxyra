@@ -269,6 +269,7 @@ struct MeshSettings {
     cutout_leaves: bool,
     translucent_layers: Arc<[bool]>,
     leaf_culling: LeafCullingMode,
+    hidden_blocks: Arc<[u32]>,
 }
 enum Job {
     Generate(i32, i32),
@@ -478,6 +479,10 @@ pub struct Streaming {
     saves_beside_final: bool,
     lighting: FxHashMap<(i32, i32), u64>,
     meshing: FxHashMap<(i32, i32, i32), u64>,
+    /// Sections of another level's chunks being meshed (`mesh_foreign`), and those done.
+    foreign: FxHashMap<(u8, i32, i32, i32), u64>,
+    foreign_tags: FxHashMap<u64, u8>,
+    foreign_done: Vec<(u8, (i32, i32, i32), SectionMesh)>,
     /// The sequence each section's latest accepted mesh was dispatched at
     /// (`CompiledSectionMesh.compileTaskStartTimeNs`).
     compile_started: FxHashMap<(i32, i32, i32), u64>,
@@ -523,6 +528,8 @@ pub struct Streaming {
     pub translucent_layers: Arc<[bool]>,
     /// What the mesher does with leaf faces inside a canopy (`LeafCullingMode`).
     pub leaf_culling: LeafCullingMode,
+    /// Block states the mesher leaves out (`Mesher::hidden_blocks`).
+    pub hidden_blocks: Arc<[u32]>,
     /// Incremental relighting of block edits on lit chunks (see `light::relight`).
     light_tables: Arc<LightTables>,
     /// Applied edits by sequence, replayed onto light jobs snapshotted before them.
@@ -941,6 +948,7 @@ impl<G: ChunkGenerator> Jobs<G> {
                     cutout_leaves: settings.cutout_leaves,
                     translucent_layers: &settings.translucent_layers,
                     leaf_culling: settings.leaf_culling,
+                    hidden_blocks: &settings.hidden_blocks,
                     assets: &context.assets,
                     render: &context.render,
                     tables: &context.tables,
@@ -1029,6 +1037,9 @@ impl Streaming {
             saves_beside_final: generator.decorates_beside_final(),
             lighting: Default::default(),
             meshing: Default::default(),
+            foreign: Default::default(),
+            foreign_tags: Default::default(),
+            foreign_done: Vec::new(),
             compile_started: Default::default(),
             lit: Default::default(),
             meshed: Default::default(),
@@ -1052,6 +1063,7 @@ impl Streaming {
             cutout_leaves: true,
             translucent_layers: Arc::from([]),
             leaf_culling: LeafCullingMode::Off,
+            hidden_blocks: Arc::from(Vec::new()),
             light_tables,
             light_log: Vec::new(),
             light_edit_sequence: 0,
@@ -1496,6 +1508,77 @@ impl Streaming {
     pub fn is_meshing(&self, section: (i32, i32, i32)) -> bool {
         self.meshing.contains_key(&section)
     }
+    /// Meshes `sections` of the column at `(x, z)` of another level's `chunks` (with its eight
+    /// neighbours),
+    /// which `World` never holds: the level seen through a portal. Its meshes come back from
+    /// `take_foreign`, keyed by `tag` (the level) and the chunks' own positions; false while a
+    /// neighbour is missing.
+    pub fn mesh_foreign(
+        &mut self,
+        tag: u8,
+        chunks: &FxHashMap<(i32, i32), Arc<Chunk>>,
+        x: i32,
+        z: i32,
+        sections: &[i32],
+        nether: bool,
+    ) -> bool {
+        let mut region: Region = Default::default();
+        for dz in 0..3 {
+            for dx in 0..3 {
+                let Some(chunk) = chunks.get(&(x + dx as i32 - 1, z + dz as i32 - 1)) else {
+                    return false;
+                };
+                region[dz][dx] = Some(chunk.clone());
+            }
+        }
+        let region = Box::new(region);
+        for &sy in sections {
+            self.sequence += 1;
+            self.foreign.insert((tag, x, sy, z), self.sequence);
+            self.foreign_tags.insert(self.sequence, tag);
+            // As near as the player's own column: the portal is beside them.
+            self.submit(
+                Some(self.center),
+                1,
+                Job::Mesh(
+                    x,
+                    sy,
+                    z,
+                    region.clone(),
+                    self.sequence,
+                    MeshSettings {
+                        nether,
+                        shader_pack_lighting: self.shader_pack_lighting,
+                        zoom: self.biome_zoom,
+                        blend_radius: self.biome_blend,
+                        smooth_lighting: self.smooth_lighting,
+                        cutout_leaves: self.cutout_leaves,
+                        translucent_layers: self.translucent_layers.clone(),
+                        leaf_culling: self.leaf_culling,
+                        hidden_blocks: self.hidden_blocks.clone(),
+                    },
+                ),
+            );
+        }
+        true
+    }
+    /// Forgets that level's sections still being meshed (`mesh_foreign`).
+    pub fn drop_foreign(&mut self, tag: u8) {
+        self.foreign.retain(|k, _| k.0 != tag);
+        let (done, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.foreign_done)
+            .into_iter()
+            .partition(|d| d.0 == tag);
+        self.foreign_done = kept;
+        self.free(done.into_iter().map(|(_, k, mesh)| (k, mesh)).collect());
+    }
+    /// How many of the other level's sections are still being meshed (`mesh_foreign`).
+    pub fn foreign_pending(&self) -> usize {
+        self.foreign.len()
+    }
+    /// The other level's meshes finished since the last call (`mesh_foreign`).
+    pub fn take_foreign(&mut self) -> Vec<(u8, (i32, i32, i32), SectionMesh)> {
+        std::mem::take(&mut self.foreign_done)
+    }
     pub fn pending(&self) -> usize {
         self.shared.queue.lock().unwrap().len()
     }
@@ -1643,6 +1726,15 @@ impl Streaming {
                     }
                 }
                 Done::Meshed(x, sy, z, mesh, seq) => {
+                    if let Some(tag) = self.foreign_tags.remove(&seq) {
+                        if self.foreign.get(&(tag, x, sy, z)) == Some(&seq) {
+                            self.foreign.remove(&(tag, x, sy, z));
+                            self.foreign_done.push((tag, (x, sy, z), mesh));
+                        } else {
+                            stale.push(((x, sy, z), mesh));
+                        }
+                        continue;
+                    }
                     if self.meshing.get(&(x, sy, z)) != Some(&seq) {
                         stale.push(((x, sy, z), mesh));
                         continue;
@@ -2033,6 +2125,7 @@ impl Streaming {
                             cutout_leaves: self.cutout_leaves,
                             translucent_layers: self.translucent_layers.clone(),
                             leaf_culling: self.leaf_culling,
+                            hidden_blocks: self.hidden_blocks.clone(),
                         },
                     ),
                 );

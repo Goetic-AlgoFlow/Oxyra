@@ -84,6 +84,10 @@ struct Flags {
     /// dimension and feet), and the lines of the last tick there.
     debug_at: Mutex<Option<(Dim, [i32; 3])>>,
     debug: Mutex<super::debug_lines::ServerDebug>,
+    /// The level behind the portal near the window's player it wants to see through, and the
+    /// server's snapshot of it (`game/portal_view.rs`).
+    portal_at: Mutex<Vec<super::portal_view::PortalRequest>>,
+    portal_view: Mutex<Vec<Arc<super::portal_view::PortalSnapshot>>>,
 }
 
 /// Work the window hands its server thread (`MinecraftServer.execute`).
@@ -121,6 +125,22 @@ impl Integrated {
         if let Ok(mut want) = self.flags.debug_at.lock() {
             *want = at;
         }
+    }
+    /// Asks for the levels behind these portals (`game/portal_view.rs`), and no others.
+    pub(super) fn request_portal_views(&self, requests: Vec<super::portal_view::PortalRequest>) {
+        if let Ok(mut want) = self.flags.portal_at.lock() {
+            if let Ok(mut view) = self.flags.portal_view.lock() {
+                view.retain(|v| requests.iter().any(|r| r.from == v.request.from));
+            }
+            *want = requests;
+        }
+    }
+    /// The server's last snapshots of the levels behind the portals asked for.
+    pub(super) fn portal_views(&self) -> Vec<Arc<super::portal_view::PortalSnapshot>> {
+        self.flags
+            .portal_view
+            .lock()
+            .map_or_else(|_| Vec::new(), |v| v.clone())
     }
     /// The debug entries' server lines of the last tick.
     pub(super) fn debug(&self) -> super::debug_lines::ServerDebug {
@@ -685,6 +705,42 @@ impl Game<'_> {
             self.wait_for_next_server_tick(&mut next, paused);
         }
         self.stop_integrated()
+    }
+
+    /// Whether the window wants to see through a portal into `dim`: it keeps running.
+    pub(super) fn portal_view_level(&self, dim: Dim) -> bool {
+        self.portal_view_requests().iter().any(|r| r.to == dim)
+    }
+
+    /// What the window asks to see through portals (`game/portal_view.rs`).
+    pub(super) fn portal_view_requests(&self) -> Vec<super::portal_view::PortalRequest> {
+        self.serving
+            .as_ref()
+            .and_then(|serving| serving.flags.portal_at.lock().ok().map(|want| want.clone()))
+            .unwrap_or_default()
+    }
+
+    /// After the level of `dim` ticked: the snapshot of it the window's portal view wants.
+    pub(super) fn publish_portal_view(&mut self, dim: Dim) {
+        let Some(flags) = self.serving.as_ref().map(|s| s.flags.clone()) else {
+            return;
+        };
+        let want = flags.portal_at.lock().map_or_else(|_| Vec::new(), |w| w.clone());
+        let want: Vec<_> = want.into_iter().filter(|r| r.to == dim).collect();
+        // One list of the level's entities, for every view into it.
+        if want.is_empty() {
+            return;
+        }
+        let entities = self.portal_view_entities(dim);
+        for request in want {
+            let snapshot = Arc::new(self.portal_view_snapshot(request, entities.clone()));
+            if let Ok(mut view) = flags.portal_view.lock() {
+                match view.iter_mut().find(|v| v.request.from == request.from) {
+                    Some(old) => *old = snapshot,
+                    None => view.push(snapshot),
+                }
+            }
+        }
     }
 
     /// After the level of `dim` ticked: the window's debug entries' server

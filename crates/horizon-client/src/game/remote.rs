@@ -599,6 +599,8 @@ pub(super) struct Remote {
     listed: std::collections::HashSet<u128>,
     /// `ClientboundLoginPacket.onlineMode`: the player list shows heads.
     pub(super) online_mode: bool,
+    /// The profiles in `skins` whose model is slim.
+    slim_skins: std::collections::HashSet<u128>,
     /// Player entities in the level: entity id to profile UUID.
     level_players: HashMap<i32, u128>,
     /// The profile name each player entity was created with (`RemotePlayer.getGameProfile`): it outlives the
@@ -1059,6 +1061,7 @@ impl Game<'_> {
             skins: HashMap::new(),
             listed: Default::default(),
             online_mode: false,
+            slim_skins: Default::default(),
             level_players: HashMap::new(),
             level_player_names: HashMap::new(),
             level_player_textures: HashMap::new(),
@@ -5033,6 +5036,20 @@ impl Game<'_> {
     /// `PlayerInfo.getSkin` for every player entity, including NPCs that are
     /// never in the tab list: resolve each profile's textures and give the
     /// level's player models their skin.
+    /// The skin of a player in a level seen through a portal: known to this client by the
+    /// player list, downloaded as if it were in this level (a negative id matches no entity).
+    pub(super) fn foreign_player_skin(&mut self, id: u32, uuid: u128) -> (String, bool) {
+        let known = self.remote.as_mut().and_then(|r| {
+            r.level_players.insert(-1 - id as i32, uuid);
+            r.skins.get(&uuid).map(|s| (s.clone(), r.slim_skins.contains(&uuid)))
+        });
+        let wanted = known.unwrap_or_else(|| {
+            let skin = horizon_client::tab_list::default_skin(uuid);
+            (skin.to_owned(), skin.contains("/slim/"))
+        });
+        self.drawn_skin(uuid, wanted)
+    }
+
     pub(super) fn update_remote_skins(&mut self) {
         let local = self.remote.as_ref().map(|r| r.profile);
         self.poll_own_profile();
@@ -5127,6 +5144,7 @@ impl Game<'_> {
         };
         let Some((level, skins, own)) = self.remote.as_mut().map(|r| {
             r.skins = resolved.into_iter().collect();
+            r.slim_skins = slim.clone();
             (
                 r.level_players
                     .iter()
@@ -5580,7 +5598,8 @@ impl Game<'_> {
             (player.position.x.floor() as i32) >> 4,
             (player.position.z.floor() as i32) >> 4,
         );
-        let section_ready = self.streaming.is_lit(cx, cz);
+        // After a portal crossing the view's meshes stand in for the level: no wait for it.
+        let section_ready = self.streaming.is_lit(cx, cz) || self.portal_crossed.is_some();
         let camera_y = (player.position.y + f64::from(self.eye)).floor() as i32;
         let shape = self.world.shape;
         let check = horizon_client::level_loading::PlayerCheck {
@@ -5629,6 +5648,8 @@ impl Game<'_> {
             r.session.send_far_terrain();
         }
         self.tick_chat_session();
+        // The level behind a portal near the player, where this game holds the world.
+        self.request_portal_view();
         // Minecraft.tick sends this even when the player cannot tick yet,
         // including while waiting for chunks. Keep it outside early returns.
         if self.remote.as_ref().is_some_and(|r| r.joined) {
@@ -9393,6 +9414,11 @@ impl Game<'_> {
         let Some(r) = &self.remote else { return false };
         let loading = r.level_load.is_active();
         if self.player.is_some() && !loading {
+            return false;
+        }
+        // A portal crossed with the level behind it already meshed (`game/portal_view.rs`):
+        // the world goes on, no loading screen.
+        if self.portal_crossed.is_some() {
             return false;
         }
         let (w, h) = (batch.width, batch.height);

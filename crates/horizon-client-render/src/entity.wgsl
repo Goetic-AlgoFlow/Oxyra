@@ -34,6 +34,8 @@ struct Globals {
     // HDR lighting: x how strongly the sky lights the world now (`Sky::sky_light_factor`),
     // y what the sky and fog get: the same, but none under water.
     hdr_light: vec4<f32>,
+    clip: vec4<f32>,
+    portal_seam: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
@@ -74,6 +76,8 @@ struct Out {
     @location(13) @interpolate(flat) tier: u32,
     // HDR lighting (`hdr_scene`), 0 for what isn't lit.
     @location(14) scene: f32,
+    // The distance past a portal view's cut (`Globals::clip`): what lies before it is dropped.
+    @location(15) portal_cut: f32,
 }
 // Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
 fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
@@ -127,6 +131,7 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
     var out: Out;
     out.clip = globals.view_proj * vec4(position, 1.0);
     out.proj = vec4(out.clip.xy * 0.5 + out.clip.w * 0.5, out.clip.zw);
+    out.portal_cut = select(1.0, dot(vec4(position, 1.0), globals.clip), any(globals.clip != vec4(0.0)));
     out.uv = uv;
     let l = vec2(max(f32(light.y), dynamic_block_light(position)), f32(light.x));
     let lm = textureSampleLevel(lightmap, lightmap_sampler,
@@ -264,6 +269,7 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
 }
 // CRUMBLING_UV_END
 @fragment fn fs_entity(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if in.portal_cut < 0.0 { discard; }
     return entity_color(in, front);
 }
 fn entity_color(in: Out, front: bool) -> vec4<f32> {

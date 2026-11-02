@@ -345,6 +345,12 @@ struct Globals {
     /// full (`hdr::Hdr::windows`); zero without HDR.
     hdr_windows: [[f32; 4]; 2],
     hdr_light: [f32; 4],
+    /// The portal view's cut (`PortalView::clip`). Zero in the window's pass.
+    clip: [f32; 4],
+    /// A portal view's light at the exit's plane (rgb, the entry's, so that a frame seen half on
+    /// each side has no seam) and w: 1 / the blocks it takes to give way to the view's own light.
+    /// Zero elsewhere.
+    portal_seam: [f32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -360,6 +366,13 @@ struct GpuStaticEntitySection {
     revision: u64,
     vertices: u32,
 }
+/// How many blocks past the exit's plane the entry's light gives way to the level behind's.
+const PORTAL_SEAM_BLOCKS: f32 = 3.0;
+/// How many portal views a frame draws, counting those seen through others.
+pub const MAX_PORTAL_VIEWS: usize = 8;
+/// Where the levels behind portals sit in the renderer: chunks this far east per level, past any
+/// world border, so their sections share the renderer's uploads, arenas and draws.
+pub const PORTAL_X: i32 = 1 << 24;
 pub type SectionKey = (i32, i32, i32);
 /// The water mirror's targets: the world as a camera mirrored about the water plane sees
 /// it, at half the world's resolution (the material stage's `reflection`).
@@ -367,6 +380,96 @@ struct MirrorTarget {
     size: [u32; 2],
     color: wgpu::TextureView,
     depth: wgpu::TextureView,
+}
+/// The level seen through a portal (the game's portal view), drawn into a target of its own and
+/// shown in the portal's opening, in the window's pass or in the pass of the view it is seen in.
+#[derive(Clone, Debug)]
+pub struct PortalView {
+    /// The view this portal is seen in (earlier in `Frame::portals`), None in the window.
+    pub parent: Option<usize>,
+    /// The player's camera carried through the portal, in the renderer's coordinates of the level
+    /// behind it.
+    pub camera: DVec3,
+    /// The turn (radians about y) taking what `camera` sees, relative to it, to the window's
+    /// camera-relative space.
+    pub yaw: f32,
+    /// The exit portal's plane relative to `camera` (normal toward what is seen): what lies on
+    /// its near side is cut away.
+    pub clip: [f32; 4],
+    /// The entry portal's opening: its corners in the renderer's coordinates of the level it is
+    /// in, in order around it, on the far face of its frame.
+    pub opening: [DVec3; 4],
+    /// The stored light in the entry portal (`World::light`: sky << 4 | block), which the view
+    /// starts from at the exit's plane.
+    pub entry_light: u8,
+    /// The level behind's fog colour, and what its sky clears to (black in the End, whose sky
+    /// is drawn over it).
+    pub fog: [f32; 3],
+    pub clear: [f32; 3],
+    /// The level behind's sky, for its light (the portal view's lightmap), and its
+    /// environmental fog (the Nether's haze: start, end).
+    pub sky: crate::environment::Sky,
+    pub environment_fog: Option<(f32, f32)>,
+    /// The level behind's entities as the server last drew them, and the point (in the
+    /// coordinates of `camera`) their vertices are relative to.
+    pub entities: std::sync::Arc<Vec<Vertex>>,
+    pub entities_at: DVec3,
+}
+/// What the renderer holds for one portal view it draws this frame.
+struct PortalSlot {
+    globals: wgpu::Buffer,
+    group: wgpu::BindGroup,
+    lightmap: wgpu::Texture,
+    lightmap_pixels: Option<[u8; 16 * 16 * 4]>,
+    target: Option<MirrorTarget>,
+    opening: wgpu::Buffer,
+    opening_group: Option<wgpu::BindGroup>,
+    /// Its entities: their globals (the view's, moved to their origin), group and vertices, and
+    /// which list those vertices hold.
+    entity_globals: wgpu::Buffer,
+    entity_group: wgpu::BindGroup,
+    entity_buffer: Option<(wgpu::Buffer, u64)>,
+    entities: Option<std::sync::Arc<Vec<Vertex>>>,
+    visible: Vec<resident::Visible>,
+    /// Its draws in `draws`: solid first and count, translucent first and count.
+    solid: (u32, u32),
+    translucent: (u32, u32),
+    /// The part of the frame its opening can show, once clipped by the views it is seen in.
+    scissor: Option<[u32; 4]>,
+}
+/// The frame's pixels the corners cover (x, y, width, height), None when one lies behind the
+/// camera.
+fn portal_scissor(corners: &[[f32; 4]; 4], size: [u32; 2]) -> Option<[u32; 4]> {
+    if corners.iter().any(|c| c[3] <= 1e-3) {
+        return None;
+    }
+    let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for c in corners {
+        let at = [
+            (c[0] / c[3] * 0.5 + 0.5) * size[0] as f32,
+            (0.5 - c[1] / c[3] * 0.5) * size[1] as f32,
+        ];
+        for i in 0..2 {
+            min[i] = min[i].min(at[i]);
+            max[i] = max[i].max(at[i]);
+        }
+    }
+    let low = |v: f32, s: u32| (v.floor().max(0.0) as u32).min(s);
+    let high = |v: f32, s: u32| (v.ceil().max(0.0) as u32).min(s);
+    let (x, y) = (low(min[0], size[0]), low(min[1], size[1]));
+    Some([x, y, high(max[0], size[0]) - x, high(max[1], size[1]) - y])
+}
+/// Both scissors' common part.
+fn portal_scissor_within(own: Option<[u32; 4]>, parent: Option<[u32; 4]>) -> Option<[u32; 4]> {
+    match (own, parent) {
+        (Some(a), Some(b)) => {
+            let (x, y) = (a[0].max(b[0]), a[1].max(b[1]));
+            let right = (a[0] + a[2]).min(b[0] + b[2]).max(x);
+            let bottom = (a[1] + a[3]).min(b[1] + b[3]).max(y);
+            Some([x, y, right - x, bottom - y])
+        }
+        (a, b) => a.or(b),
+    }
 }
 struct SectionGpu {
     /// Arena page and first vertex of its solid quads, and after them its
@@ -609,6 +712,9 @@ pub struct Frame<'a> {
     /// of Horizon's own packs reads the water mirror (`Game::water_plane`,
     /// `Renderer::wants_water_plane`).
     pub water_plane: Option<f32>,
+    /// The levels behind the portals near the player, seen through them, nearest first: what
+    /// fits in `MAX_PORTAL_VIEWS` is drawn. A view comes after the view it is seen in.
+    pub portals: Vec<PortalView>,
     /// Skip sections the camera cannot see through open faces (vanilla's
     /// occlusion graph; off in spectator-like views inside blocks).
     pub cave_culling: bool,
@@ -857,6 +963,13 @@ pub struct Renderer {
     mirror_globals: wgpu::Buffer,
     mirror_group: wgpu::BindGroup,
     mirror: Option<MirrorTarget>,
+    /// The portal view (`Frame::portal`): its solid terrain pipeline, camera globals and group,
+    /// its sections, its target with the opening's group, the opening's pipeline and uniform.
+    solid_portal: wgpu::RenderPipeline,
+    translucent_portal: wgpu::RenderPipeline,
+    portal_slots: Vec<PortalSlot>,
+    portal_opening: wgpu::RenderPipeline,
+    portal_opening_bindings: wgpu::BindGroupLayout,
     entity_pipeline: wgpu::RenderPipeline,
     static_entity_pipeline: wgpu::RenderPipeline,
     static_entity_group: wgpu::BindGroup,
@@ -994,6 +1107,8 @@ pub struct Renderer {
     /// Every section and far tile was dropped to change the layout since the game
     /// last asked (`take_dropped_sections`).
     sections_dropped: bool,
+    /// How many times every section was cleared (`clear_sections`).
+    sections_cleared: u64,
     sorted_indices: arena::Arena,
     /// Buffers of released arena pages, freed a few frames later on a thread of their own.
     graveyard: arena::Graveyard<wgpu::Buffer>,
@@ -2349,6 +2464,18 @@ impl Renderer {
             true,
             None,
         );
+        // The portal view's camera, not mirrored: `fs_solid_mirror` cuts at its plane (`clip`).
+        let solid_portal = pipeline(
+            "Terrain solid (portal)",
+            "vs_terrain",
+            "fs_solid_mirror",
+            &terrain_buffers,
+            tri,
+            Some(wgpu::Face::Back),
+            true,
+            true,
+            None,
+        );
         let translucent = pipeline(
             "Terrain translucent",
             "vs_terrain",
@@ -2370,6 +2497,17 @@ impl Renderer {
             false,
             true,
             Some(flat::ALPHA_ONLY),
+        );
+        let translucent_portal = pipeline(
+            "Terrain translucent (portal)",
+            "vs_terrain",
+            "fs_translucent_portal",
+            &terrain_buffers,
+            tri,
+            Some(wgpu::Face::Back),
+            true,
+            true,
+            Some(alpha_blend),
         );
         let sky = pipeline(
             "Sky",
@@ -3670,7 +3808,178 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
-        let screen_shader = kept.create_shader_module(wgpu::ShaderModuleDescriptor {
+        // The portal view's opening (portal_opening.wgsl): the scene's depth, no blending.
+        let portal_slots = (0..MAX_PORTAL_VIEWS)
+            .map(|_| {
+                let globals = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Portal view globals"),
+                    size: std::mem::size_of::<Globals>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let lightmap = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Portal view lightmap"),
+                    size: wgpu::Extent3d {
+                        width: 16,
+                        height: 16,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let group = terrain_group(
+                    &device,
+                    "Portal view resources",
+                    &bindings,
+                    &globals,
+                    &sprite_views,
+                    &sprite_sampler,
+                    &lightmap.create_view(&Default::default()),
+                    &lightmap_sampler,
+                    &emission_stats.view,
+                );
+                let entity_globals = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Portal view entity globals"),
+                    size: std::mem::size_of::<Globals>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let entity_lightmap = lightmap.create_view(&Default::default());
+                let entity_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Portal view entity resources"),
+                    layout: &entity_bindings,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: entity_globals.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&atlas_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(&entity_lightmap),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: wgpu::BindingResource::TextureView(&glint_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: wgpu::BindingResource::Sampler(&glint_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: wgpu::BindingResource::TextureView(&glint_armor_view),
+                        },
+                    ],
+                });
+                PortalSlot {
+                    globals,
+                    group,
+                    lightmap,
+                    lightmap_pixels: None,
+                    target: None,
+                    opening: device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Portal opening"),
+                        size: 64,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }),
+                    opening_group: None,
+                    entity_globals,
+                    entity_group,
+                    entity_buffer: None,
+                    entities: None,
+                    visible: Vec::new(),
+                    solid: (0, 0),
+                    translucent: (0, 0),
+                    scissor: None,
+                }
+            })
+            .collect();
+        let portal_opening_bindings =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Portal opening bindings"),
+                entries: &[
+                    entry(
+                        0,
+                        vf,
+                        wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                    ),
+                    entry(
+                        1,
+                        vf,
+                        wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                    ),
+                ],
+            });
+        let portal_opening_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Portal opening"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("portal_opening.wgsl").into()),
+        });
+        let portal_opening = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Portal opening"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Portal opening layout"),
+                    bind_group_layouts: &[Some(&portal_opening_bindings)],
+                    ..Default::default()
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &portal_opening_shader,
+                entry_point: Some("vs_opening"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &portal_opening_shader,
+                entry_point: Some("fs_opening"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format.remove_srgb_suffix(),
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let screen_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon screen effects"),
             source: wgpu::ShaderSource::Wgsl(include_str!("screen.wgsl").into()),
         });
@@ -3960,6 +4269,11 @@ impl Renderer {
             mirror_globals,
             mirror_group,
             mirror: None,
+            solid_portal,
+            translucent_portal,
+            portal_slots,
+            portal_opening,
+            portal_opening_bindings,
             entity_pipeline,
             static_entity_pipeline,
             hdr_mark_pipeline,
@@ -4057,6 +4371,7 @@ impl Renderer {
             translucent_arena,
             translucent_batching,
             sections_dropped: false,
+            sections_cleared: 0,
             sorted_indices,
             graveyard: Default::default(),
             translucent_sorter: translucency::Sorter::default(),
@@ -4648,6 +4963,52 @@ impl Renderer {
     /// keeping the list's order (translucent sections go back to front).
     /// `indirect` holds the list's draws from `base`. Leaves the quad
     /// indices bound, as the draws after it expect.
+    /// The portal views in their openings, over a shader pack's finished image, behind what
+    /// stands before them in the depth it left. Skipped where the image and the depth differ in
+    /// size (a pack rendering at another scale).
+    fn portal_openings_over(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Frame,
+        active: &[usize],
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        size: [u32; 2],
+    ) {
+        if active.is_empty() || size != [self.config.width, self.config.height] {
+            return;
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Portal openings"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.portal_opening);
+        for (slot, &i) in active.iter().enumerate() {
+            if frame.portals[i].parent.is_none()
+                && let Some(group) = &self.portal_slots[slot].opening_group
+            {
+                pass.set_bind_group(0, group, &[]);
+                pass.draw(0..6, 0..1);
+            }
+        }
+    }
     fn draw_sections(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -4952,6 +5313,7 @@ impl Renderer {
         self.newest_lod_fade = None;
         self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
+        self.sections_cleared += 1;
         self.lods.clear();
         self.lod_cutout.clear();
         self.lod_retiring.clear();
@@ -5010,6 +5372,10 @@ impl Renderer {
     /// Whether every section and far tile was dropped since the last call, to be
     /// laid out again (`follow_translucent_layout`): the game meshes them again,
     /// as for a new renderer.
+    /// Changes each time every section is cleared: what was uploaded is gone.
+    pub fn sections_cleared(&self) -> u64 {
+        self.sections_cleared
+    }
     pub fn take_dropped_sections(&mut self) -> bool {
         std::mem::take(&mut self.sections_dropped)
     }
@@ -5793,38 +6159,7 @@ impl Renderer {
             self.lightmap_uploaded = false;
             return;
         }
-        // lightmap.fsh: per (block, sky) level.
-        let brightness = |level: f32| level / (4.0 - 3.0 * level);
-        let mut pixels = [0u8; 16 * 16 * 4];
-        for s in 0..16 {
-            for b in 0..16 {
-                let block_level = b as f32 / 15.0;
-                let sky_level = s as f32 / 15.0;
-                let block_brightness = brightness(block_level) * (1.4 + flicker);
-                let sky_brightness = brightness(sky_level) * sky.sky_light_factor;
-                // NightVisionColor defaults to 0x999999.
-                let mut color =
-                    Vec3::from(sky.ambient_light_color).max(Vec3::splat(0.6 * night_vision));
-                color += Vec3::from(sky.sky_light_color) * sky_brightness;
-                let parabolic = (2.0 * block_level - 1.0).powi(2);
-                let block_color = Vec3::from(sky.block_light_tint).lerp(Vec3::ONE, 0.9 * parabolic);
-                color += block_color * block_brightness;
-                // lightmap.fsh: a boss bar mixes the light toward 70/60/60%.
-                color = color.lerp(color * Vec3::new(0.7, 0.6, 0.6), boss_darken);
-                color -= Vec3::splat(darkness);
-                color = color.clamp(Vec3::ZERO, Vec3::ONE);
-                let max = color.max_element().max(1e-6);
-                let inverted = 1.0 - max;
-                let scaled = 1.0 - inverted.powi(4);
-                let not_gamma = color * (scaled / max);
-                color = color.lerp(not_gamma, gamma);
-                let i = (s * 16 + b) * 4;
-                pixels[i] = (color.x * 255.0) as u8;
-                pixels[i + 1] = (color.y * 255.0) as u8;
-                pixels[i + 2] = (color.z * 255.0) as u8;
-                pixels[i + 3] = 255;
-            }
-        }
+        let mut pixels = lightmap_pixels(sky, darkness, gamma, night_vision, flicker, boss_darken);
         if self.fullbright {
             pixels.fill(255);
         }
@@ -6163,6 +6498,70 @@ impl Renderer {
         let pose = frame.bob * frame.spin;
         let view_proj = views.primary().view_proj(pose);
         laps.lap("r_acquire");
+        // The portal views this frame draws: those whose opening is in sight, in the window or
+        // in a view drawn, nearest first. `portal_slots[slot]` is the view's index in the frame.
+        let mut active_portals: Vec<usize> = Vec::new();
+        if !frame.title {
+            let cull = views.cull().view_proj(pose);
+            let mut slot_of = vec![false; frame.portals.len()];
+            for (i, p) in frame.portals.iter().enumerate() {
+                if active_portals.len() == MAX_PORTAL_VIEWS {
+                    break;
+                }
+                let (camera, turn) = match p.parent {
+                    None => (frame.camera, Mat4::IDENTITY),
+                    Some(q) if slot_of[q] => (
+                        frame.portals[q].camera,
+                        Mat4::from_rotation_y(frame.portals[q].yaw),
+                    ),
+                    Some(_) => continue,
+                };
+                let corners = p.opening.map(|c| (c - camera).as_vec3());
+                let (mut min, mut max) = (corners[0], corners[0]);
+                for c in corners {
+                    min = min.min(c);
+                    max = max.max(c);
+                }
+                if (Frustum {
+                    planes: frustum(cull * turn),
+                })
+                .intersects(min, max)
+                {
+                    slot_of[i] = true;
+                    active_portals.push(i);
+                }
+            }
+        }
+        // Each view's light: the level behind's.
+        for (slot, &i) in active_portals.iter().enumerate() {
+            let p = &frame.portals[i];
+            let mut pixels = lightmap_pixels(
+                &p.sky,
+                frame.darkness.1,
+                (self.gamma - frame.darkness.0).max(0.0),
+                frame.night_vision,
+                frame.block_flicker,
+                frame.boss_darken,
+            );
+            if self.fullbright {
+                pixels.fill(255);
+            }
+            if self.portal_slots[slot].lightmap_pixels != Some(pixels) {
+                self.uploads.texture(
+                    &mut encoder,
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.portal_slots[slot].lightmap,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    16,
+                    16,
+                    &pixels,
+                );
+                self.portal_slots[slot].lightmap_pixels = Some(pixels);
+            }
+        }
         // TAA runs where the world post pass does, not under a shader pack's own.
         let taa = !frame.title
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
@@ -6313,6 +6712,8 @@ impl Renderer {
                 0.0,
                 0.0,
             ],
+            clip: [0.0; 4],
+            portal_seam: [0.0; 4],
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
@@ -6512,6 +6913,28 @@ impl Renderer {
                 height(b).total_cmp(&height(a))
             });
         }
+        // The portal views' sections: what their cameras see, with origins relative to them (the
+        // levels behind sit `PORTAL_X` chunks away, too far for f32 from the window's camera).
+        for slot in &mut self.portal_slots {
+            slot.visible.clear();
+        }
+        for (slot, &i) in active_portals.iter().enumerate() {
+            let p = &frame.portals[i];
+            let sees = Frustum {
+                planes: frustum(cull_proj * Mat4::from_rotation_y(p.yaw)),
+            };
+            let visible = &mut self.portal_slots[slot].visible;
+            crate::spans::time("portal visibility", || {
+                self.sections.visible(
+                    p.camera,
+                    (frame.detail_distance / 16.0) as i32,
+                    &sees,
+                    |_| true,
+                    |_, _| false,
+                    visible,
+                )
+            });
+        }
         if self.animated_textures {
             self.active_animated_layers.fill(0);
             for v in &visible {
@@ -6536,7 +6959,8 @@ impl Renderer {
                     }
                 }
             }
-            for v in &shadow_visible {
+            let portal_visible = self.portal_slots.iter().flat_map(|s| &s.visible);
+            for v in shadow_visible.iter().chain(portal_visible) {
                 let s = self.sections.get(v.slot);
                 for &layer in &*s.animated_layers {
                     let layer = layer as usize;
@@ -6550,7 +6974,8 @@ impl Renderer {
             self.animate(&mut encoder, frame.ticks, !frame.title);
         }
         self.drawn_sections = visible.len() + visible_lods.len();
-        let instances = self.drawn_sections + shadow_visible.len();
+        let portal_sections: usize = self.portal_slots.iter().map(|s| s.visible.len()).sum();
+        let instances = self.drawn_sections + shadow_visible.len() + portal_sections;
         if instances as u64 > self.instance_capacity {
             self.instance_capacity = (instances as u64).next_power_of_two();
             self.instances = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -6601,6 +7026,12 @@ impl Renderer {
                     shadow_visible
                         .iter()
                         .map(|v| section_instance(v.origin, 0, visibility(v.key))),
+                )
+                .chain(
+                    self.portal_slots
+                        .iter()
+                        .flat_map(|s| &s.visible)
+                        .map(|v| section_instance(v.origin, 0, 1.0)),
                 ),
         );
         if !self.origins.is_empty() {
@@ -6945,6 +7376,79 @@ impl Renderer {
         );
         let shadow_translucent = self.draws.len() as u32 - shadow_first - shadow_solid;
         laps.lap("r_nearby");
+        // Each portal camera's solid sections after the shadow camera's, every face, then its
+        // translucent sections, back to front, sorted from the carried camera.
+        // shortcut: two views into one level share its sections' sort, the nearest view's.
+        let mut base = self.drawn_sections + shadow_visible.len();
+        let mut sorted_regions = [i32::MIN; MAX_PORTAL_VIEWS];
+        for (slot, &i) in active_portals.iter().enumerate() {
+            let p = &frame.portals[i];
+            let visible = std::mem::take(&mut self.portal_slots[slot].visible);
+            let portal_first = self.draws.len() as u32;
+            self.shadow_runs.clear();
+            for (k, v) in visible.iter().enumerate() {
+                let s = self.sections.get(v.slot);
+                let before = self.draws.len();
+                facing_runs(&s.sides, None, v.origin, |first, quads| {
+                    self.draws.push([
+                        quads * 6,
+                        1,
+                        0,
+                        s.start as u32 + first * 4,
+                        (base + k) as u32,
+                    ]);
+                    self.draw_pages.push((s.page, None));
+                });
+                let len = self.draws.len() - before;
+                self.shadow_runs
+                    .push(v.distance, s.page, before, len, [0; 3]);
+            }
+            self.shadow_runs
+                .regroup(&mut self.draws, &mut self.draw_pages, portal_first as usize);
+            let portal_draws = self.draws.len() as u32 - portal_first;
+            let portal_translucent_first = self.draws.len() as u32;
+            let region = (p.camera.x / (f64::from(PORTAL_X) * 16.0)).round() as i32;
+            let sorts = !sorted_regions[..slot].contains(&region);
+            sorted_regions[slot] = region;
+            for (k, v) in visible.iter().enumerate().rev() {
+                let s = self.sections.get_mut(v.slot);
+                let Some((index_page, index_start)) = s.sorted_indices else {
+                    continue;
+                };
+                let origin = [
+                    v.key.0 * 16,
+                    self.layout.min_y() + v.key.1 * 16,
+                    v.key.2 * 16,
+                ];
+                if sorts
+                    && let Some(indices) =
+                        s.sort
+                            .update(p.camera.to_array(), origin, &mut self.translucent_sorter)
+                {
+                    self.uploads.buffer(
+                        &mut encoder,
+                        self.sorted_indices.buffer(index_page),
+                        index_start * 4,
+                        bytemuck::cast_slice(indices),
+                    );
+                }
+                let (page, first) = s.translucent_at;
+                self.draws.push([
+                    s.translucent * 6,
+                    1,
+                    index_start as u32,
+                    first as u32,
+                    (base + k) as u32,
+                ]);
+                self.draw_pages.push((page, Some(index_page)));
+            }
+            let portal_translucent = self.draws.len() as u32 - portal_translucent_first;
+            base += visible.len();
+            let holder = &mut self.portal_slots[slot];
+            holder.visible = visible;
+            holder.solid = (portal_first, portal_draws);
+            holder.translucent = (portal_translucent_first, portal_translucent);
+        }
         // Metal replays a multi-draw as one draw call per entry.
         self.section_draw_calls = if self.multi_draw && self.info.backend != wgpu::Backend::Metal {
             (0..self.section_draws)
@@ -7456,7 +7960,12 @@ impl Renderer {
         };
         if flat_frame {
             self.section_draw_calls = self.flat.as_ref().map_or(0, |f| f.shadow_calls[0]);
-        } else if self.multi_draw && !self.draws.is_empty() {
+        }
+        // The portal views draw from these lists, flat frame or not.
+        if (!flat_frame || !active_portals.is_empty())
+            && self.multi_draw
+            && !self.draws.is_empty()
+        {
             if self.draws.len() as u64 > self.indirect_capacity {
                 self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
                 self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -7826,6 +8335,7 @@ impl Renderer {
                     view_proj: mirror_view_projection(view_proj, plane).to_cols_array_2d(),
                     inverse_view,
                     fog_ends,
+                    clip: [0.0; 4],
                     ..globals
                 };
                 self.uploads.buffer(
@@ -7878,6 +8388,286 @@ impl Renderer {
                 }
                 drop(pass);
                 reflection = Some(mirror.color.clone());
+            }
+        }
+        // The portal views: each level behind a portal as its carried camera sees it, cut at the
+        // exit portal's plane, into a target the size of the world's (shown in the opening).
+        // shortcut: no sky behind. Under a shader pack they are drawn the classic way and shown
+        // over the pack's finished image: its lighting does not reach them.
+        let portal_drawn = !active_portals.is_empty();
+        if portal_drawn {
+            let size = self
+                .world_post
+                .size()
+                .filter(|_| scaled.is_some())
+                .unwrap_or([self.config.width, self.config.height]);
+            let view_proj = Mat4::from_cols_array_2d(&globals.view_proj);
+            let slot_of = |view: usize| active_portals.iter().position(|&i| i == view);
+            // Parents first: a view's scissor lies within its parent's.
+            for (slot, &i) in active_portals.iter().enumerate() {
+                let p = &frame.portals[i];
+                if self.portal_slots[slot]
+                    .target
+                    .as_ref()
+                    .is_none_or(|t| t.size != size)
+                {
+                    let target = |label: &'static str, format, usage| {
+                        self.device
+                            .create_texture(&wgpu::TextureDescriptor {
+                                label: Some(label),
+                                size: wgpu::Extent3d {
+                                    width: size[0],
+                                    height: size[1],
+                                    depth_or_array_layers: 1,
+                                },
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format,
+                                usage,
+                                view_formats: &[],
+                            })
+                            .create_view(&Default::default())
+                    };
+                    let color = target(
+                        "Portal view",
+                        self.config.format.remove_srgb_suffix(),
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                    );
+                    let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Portal opening resources"),
+                        layout: &self.portal_opening_bindings,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: self.portal_slots[slot].opening.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&color),
+                            },
+                        ],
+                    });
+                    let depth = target(
+                        "Portal view depth",
+                        wgpu::TextureFormat::Depth32Float,
+                        wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    );
+                    let holder = &mut self.portal_slots[slot];
+                    holder.opening_group = Some(group);
+                    holder.target = Some(MirrorTarget { size, color, depth });
+                }
+                // The opening as the window or the parent view sees it.
+                let parent = p.parent.and_then(slot_of);
+                let (camera, turn) = p.parent.map_or((frame.camera, Mat4::IDENTITY), |q| {
+                    (
+                        frame.portals[q].camera,
+                        Mat4::from_rotation_y(frame.portals[q].yaw),
+                    )
+                });
+                let seen_by = view_proj * turn;
+                let corners: [[f32; 4]; 4] = p
+                    .opening
+                    .map(|c| (seen_by * (c - camera).as_vec3().extend(1.0)).to_array());
+                self.uploads.buffer(
+                    &mut encoder,
+                    &self.portal_slots[slot].opening,
+                    0,
+                    bytemuck::cast_slice(&corners),
+                );
+                let within = parent.and_then(|q| self.portal_slots[q].scissor);
+                self.portal_slots[slot].scissor =
+                    portal_scissor_within(portal_scissor(&corners, size), within);
+            }
+            // Deepest first: a view's openings show views already drawn.
+            for (slot, &i) in active_portals.iter().enumerate().rev() {
+                let p = &frame.portals[i];
+                let children: Vec<usize> = active_portals
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &c)| frame.portals[c].parent == Some(i))
+                    .map(|(child, _)| child)
+                    .collect();
+                // fog_ends.w 0: `fs_solid_mirror` cuts where `height` (the distance from `clip`) is
+                // below it. The window's dynamic lights are not there.
+                let portal_globals = Globals {
+                    view_proj: (view_proj * Mat4::from_rotation_y(p.yaw)).to_cols_array_2d(),
+                    fog_ends: [
+                        globals.fog_ends[0],
+                        globals.fog_ends[1],
+                        globals.fog_ends[2],
+                        0.0,
+                    ],
+                    time: [globals.time[0], globals.time[1], 0.0, globals.time[3]],
+                    colored_count: [0; 4],
+                    clip: p.clip,
+                    // The level behind's fog: its colour, its haze, the render distance's.
+                    fog_color: [p.fog[0], p.fog[1], p.fog[2], 1.0],
+                    fog: {
+                        let (start, end) = p.environment_fog.unwrap_or((f32::MAX, f32::MAX));
+                        [start, end, globals.fog[2], globals.fog[3]]
+                    },
+                    portal_seam: {
+                        // The entry's light: of the window's level, or of the view it is seen in.
+                        let sky = p.parent.map_or(&frame.sky, |q| &frame.portals[q].sky);
+                        let pixels = lightmap_pixels(
+                            sky,
+                            frame.darkness.1,
+                            (self.gamma - frame.darkness.0).max(0.0),
+                            frame.night_vision,
+                            frame.block_flicker,
+                            frame.boss_darken,
+                        );
+                        let (sky_level, block) =
+                            (usize::from(p.entry_light >> 4), usize::from(p.entry_light & 15));
+                        let at = 4 * (sky_level * 16 + block);
+                        [
+                            f32::from(pixels[at]) / 255.0,
+                            f32::from(pixels[at + 1]) / 255.0,
+                            f32::from(pixels[at + 2]) / 255.0,
+                            1.0 / PORTAL_SEAM_BLOCKS,
+                        ]
+                    },
+                    ..globals
+                };
+                // The entities: their vertices once per list the server sends, their globals each
+                // frame, relative to their own origin.
+                let vertices = p.entities.len() as u64;
+                let holder = &mut self.portal_slots[slot];
+                if holder
+                    .entity_buffer
+                    .as_ref()
+                    .is_none_or(|(_, capacity)| *capacity < vertices)
+                {
+                    let capacity = vertices.max(1 << 10).next_power_of_two();
+                    holder.entity_buffer = Some((
+                        self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("Portal view entity vertices"),
+                            size: capacity * std::mem::size_of::<Vertex>() as u64,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        }),
+                        capacity,
+                    ));
+                    holder.entities = None;
+                }
+                if holder
+                    .entities
+                    .as_ref()
+                    .is_none_or(|old| !std::sync::Arc::ptr_eq(old, &p.entities))
+                {
+                    if vertices > 0
+                        && let Some((buffer, _)) = &holder.entity_buffer
+                    {
+                        self.uploads.buffer(
+                            &mut encoder,
+                            buffer,
+                            0,
+                            bytemuck::cast_slice(p.entities.as_slice()),
+                        );
+                    }
+                    holder.entities = Some(p.entities.clone());
+                }
+                let moved = (p.entities_at - p.camera).as_vec3();
+                let entity_globals = Globals {
+                    view_proj: (view_proj
+                        * Mat4::from_rotation_y(p.yaw)
+                        * Mat4::from_translation(moved))
+                    .to_cols_array_2d(),
+                    clip: [
+                        p.clip[0],
+                        p.clip[1],
+                        p.clip[2],
+                        p.clip[3] + Vec3::new(p.clip[0], p.clip[1], p.clip[2]).dot(moved),
+                    ],
+                    ..portal_globals
+                };
+                let holder = &self.portal_slots[slot];
+                self.uploads.buffer(
+                    &mut encoder,
+                    &holder.entity_globals,
+                    0,
+                    bytemuck::bytes_of(&entity_globals),
+                );
+                self.uploads.buffer(
+                    &mut encoder,
+                    &holder.globals,
+                    0,
+                    bytemuck::bytes_of(&portal_globals),
+                );
+                let Some(target) = &holder.target else {
+                    continue;
+                };
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Portal view"),
+                    timestamp_writes: self
+                        .own_timing
+                        .as_mut()
+                        .and_then(|t| t.writes("Portal view")),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &target.color,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: f64::from(p.clear[0]),
+                                g: f64::from(p.clear[1]),
+                                b: f64::from(p.clear[2]),
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &target.depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(0.0),
+                            store: wgpu::StoreOp::Discard,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+                if let Some([x, y, w, h]) = holder.scissor {
+                    pass.set_scissor_rect(x, y, w, h);
+                }
+                pass.set_bind_group(0, &holder.group, &[]);
+                pass.set_pipeline(&self.solid_portal);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_vertex_buffer(1, self.instances.slice(..));
+                self.draw_sections(
+                    &mut pass,
+                    &self.indirect,
+                    0,
+                    holder.solid.0,
+                    holder.solid.1,
+                );
+                for &child in &children {
+                    if let Some(group) = &self.portal_slots[child].opening_group {
+                        pass.set_pipeline(&self.portal_opening);
+                        pass.set_bind_group(0, group, &[]);
+                        pass.draw(0..6, 0..1);
+                    }
+                }
+                let quads = (vertices / 4).min(u64::from(self.index_quads)) as u32;
+                if quads > 0
+                    && let Some((buffer, _)) = &holder.entity_buffer
+                {
+                    pass.set_pipeline(&self.entity_pipeline);
+                    pass.set_bind_group(0, &holder.entity_group, &[]);
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw_indexed(0..quads * 6, 0, 0..1);
+                }
+                pass.set_bind_group(0, &holder.group, &[]);
+                pass.set_pipeline(&self.translucent_portal);
+                self.draw_sections(
+                    &mut pass,
+                    &self.indirect,
+                    0,
+                    holder.translucent.0,
+                    holder.translucent.1,
+                );
             }
         }
         if let Some(native) = &mut self.native {
@@ -8403,6 +9193,19 @@ impl Renderer {
                 pass.set_bind_group(0, &self.group, &[]);
                 pack_frame(&mut pass);
             }
+            // The portal views in their openings, behind what stands before them, glass included.
+            if portal_drawn && !pack_reads_world {
+                pass.set_pipeline(&self.portal_opening);
+                for (slot, &i) in active_portals.iter().enumerate() {
+                    if frame.portals[i].parent.is_none()
+                        && let Some(group) = &self.portal_slots[slot].opening_group
+                    {
+                        pass.set_bind_group(0, group, &[]);
+                        pass.draw(0..6, 0..1);
+                    }
+                }
+                pass.set_bind_group(0, &self.group, &[]);
+            }
             match self.flat.as_ref().filter(|_| flat_frame) {
                 // The pack draws translucent terrain after its deferred programs.
                 _ if pack_draws_water => {}
@@ -8842,6 +9645,14 @@ impl Renderer {
             );
             post.flush_uniforms(&self.queue);
             self.pack_post = Some((dimension, Some(post)));
+            self.portal_openings_over(
+                &mut encoder,
+                frame,
+                &active_portals,
+                &view_target,
+                depth,
+                size,
+            );
         } else if let Some((color, depth)) = &scaled
             && native_post
             && let Some(native) = &mut self.native
@@ -8857,6 +9668,14 @@ impl Renderer {
                 size,
                 history_reset,
                 native.timing.as_mut(),
+            );
+            self.portal_openings_over(
+                &mut encoder,
+                frame,
+                &active_portals,
+                &view_target,
+                depth,
+                size,
             );
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
             let world = self
@@ -9710,6 +10529,49 @@ pub(crate) fn square_downscale(pixels: &[u8], width: u32, height: u32, size: [u3
         }
     }
     out
+}
+/// The lightmap's pixels (lightmap.fsh), per (block, sky) level, for `sky`.
+fn lightmap_pixels(
+    sky: &Sky,
+    darkness: f32,
+    gamma: f32,
+    night_vision: f32,
+    flicker: f32,
+    boss_darken: f32,
+) -> [u8; 16 * 16 * 4] {
+    // lightmap.fsh: per (block, sky) level.
+    let brightness = |level: f32| level / (4.0 - 3.0 * level);
+    let mut pixels = [0u8; 16 * 16 * 4];
+    for s in 0..16 {
+        for b in 0..16 {
+            let block_level = b as f32 / 15.0;
+            let sky_level = s as f32 / 15.0;
+            let block_brightness = brightness(block_level) * (1.4 + flicker);
+            let sky_brightness = brightness(sky_level) * sky.sky_light_factor;
+            // NightVisionColor defaults to 0x999999.
+            let mut color =
+                Vec3::from(sky.ambient_light_color).max(Vec3::splat(0.6 * night_vision));
+            color += Vec3::from(sky.sky_light_color) * sky_brightness;
+            let parabolic = (2.0 * block_level - 1.0).powi(2);
+            let block_color = Vec3::from(sky.block_light_tint).lerp(Vec3::ONE, 0.9 * parabolic);
+            color += block_color * block_brightness;
+            // lightmap.fsh: a boss bar mixes the light toward 70/60/60%.
+            color = color.lerp(color * Vec3::new(0.7, 0.6, 0.6), boss_darken);
+            color -= Vec3::splat(darkness);
+            color = color.clamp(Vec3::ZERO, Vec3::ONE);
+            let max = color.max_element().max(1e-6);
+            let inverted = 1.0 - max;
+            let scaled = 1.0 - inverted.powi(4);
+            let not_gamma = color * (scaled / max);
+            color = color.lerp(not_gamma, gamma);
+            let i = (s * 16 + b) * 4;
+            pixels[i] = (color.x * 255.0) as u8;
+            pixels[i + 1] = (color.y * 255.0) as u8;
+            pixels[i + 2] = (color.z * 255.0) as u8;
+            pixels[i + 3] = 255;
+        }
+    }
+    pixels
 }
 /// The union of two frusta (the camera's and its water mirror's), for `Resident::visible`.
 #[derive(Clone, Copy, Debug)]
