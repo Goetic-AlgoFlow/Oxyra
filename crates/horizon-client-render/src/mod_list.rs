@@ -30,6 +30,8 @@ pub struct ModList {
     pub keys: BTreeMap<String, BTreeMap<String, String>>,
     /// What the Mods page shows, filled by the game from the mods it found.
     pub installed: Vec<Installed>,
+    /// The Mods page laid out as Mod Menu's (`native_mod_menu`).
+    pub menu: bool,
 }
 
 /// One installed mod as the Mods page shows it.
@@ -90,6 +92,7 @@ impl ModList {
             disabled,
             keys,
             installed: Vec::new(),
+            menu: false,
         }
     }
     pub fn serialize(&self) -> String {

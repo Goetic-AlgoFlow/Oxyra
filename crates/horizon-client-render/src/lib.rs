@@ -96,6 +96,7 @@ pub mod sound_preview;
 pub mod spans;
 pub mod split_layout;
 pub mod split_map;
+pub mod mod_menu_ui;
 pub mod split_profiles;
 pub mod split_ui;
 mod sprite_cache;

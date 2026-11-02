@@ -1525,6 +1525,9 @@ pub struct OptionsUi {
     center_language: bool,
     pub graphics: crate::graphics_ui::GraphicsUi,
     pub split_profiles: crate::split_profiles::SplitProfiles,
+    /// The Mods page as Mod Menu lays it out, and whether a mod asked for it.
+    mod_menu: crate::mod_menu_ui::ModMenuUi,
+    mod_menu_on: bool,
     /// HDR calibration while its page is open.
     pub calibration: Option<crate::hdr_calibration::Calibration>,
     /// Whether the window was fullscreen before calibration made it so (the game keeps it).
@@ -1589,6 +1592,8 @@ impl Default for OptionsUi {
             minecart_improvements: false,
             center_language: false,
             graphics: Default::default(),
+            mod_menu: Default::default(),
+            mod_menu_on: false,
             split_profiles: Default::default(),
             calibration: None,
             calibration_fullscreen: None,
@@ -3484,6 +3489,11 @@ impl OptionsUi {
                 .draw(batch, atlas, cursor, self.in_world, self.pad_style);
             return;
         }
+        self.mod_menu_on = s.mods.menu;
+        if self.page() == Page::Mods && s.mods.menu {
+            self.mod_menu.draw(&s.mods, batch, atlas, cursor, self.in_world);
+            return;
+        }
         if self.page() == Page::Packs {
             self.watch_data_packs(atlas, (w, h));
             ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
@@ -3809,6 +3819,30 @@ impl OptionsUi {
         }
         if !drag {
             self.native_text = None;
+        }
+        if self.page() == Page::Mods && s.mods.menu {
+            use crate::mod_menu_ui::Click;
+            if right || drag {
+                return Vec::new();
+            }
+            return match self.mod_menu.click(&s.mods, atlas, (x, y), size) {
+                Click::Nothing => Vec::new(),
+                Click::Pressed => vec![Event::ButtonClick],
+                Click::Toggle(i) => {
+                    s.mods.toggle(i);
+                    vec![Event::ButtonClick, Event::Changed]
+                }
+                Click::Settings(i) => {
+                    self.push(Page::NativeMod(i));
+                    vec![Event::ButtonClick, Event::NativeSettings(i)]
+                }
+                Click::Folder => vec![Event::ButtonClick, Event::OpenModFolder],
+                Click::Done => {
+                    let mut events = vec![Event::ButtonClick];
+                    events.extend(self.back(s));
+                    events
+                }
+            };
         }
         if self.page() == Page::SplitProfiles {
             use crate::split_profiles::Click;
@@ -4352,6 +4386,10 @@ impl OptionsUi {
         if self.resource_error.is_some() {
             return;
         }
+        if self.page() == Page::Mods && s.mods.menu {
+            self.mod_menu.scroll(amount);
+            return;
+        }
         if Self::graphics_page(self.page()).is_some() {
             self.graphics.scroll(s, size, amount);
             return;
@@ -4542,6 +4580,8 @@ impl OptionsUi {
         if self.page() == Page::Language {
             self.language_search.insert_text(text);
             self.scroll = 0.0;
+        } else if self.page() == Page::Mods && self.mod_menu_on {
+            self.mod_menu.type_text(text);
         } else if self.page() == Page::SplitProfiles {
             self.split_profiles.type_text(text);
         } else if Self::graphics_page(self.page()).is_some() && self.graphics.typing() {
@@ -4573,6 +4613,9 @@ impl OptionsUi {
                 self.scroll = 0.0;
             }
             return true;
+        }
+        if self.page() == Page::Mods && self.mod_menu_on {
+            return self.mod_menu.shortcut(shortcut, clipboard);
         }
         if self.page() == Page::SplitProfiles {
             return self.split_profiles.shortcut(shortcut, clipboard);
@@ -4707,6 +4750,9 @@ impl OptionsUi {
                     .to_owned()
             };
             return self.bind_key(s, value);
+        }
+        if self.page() == Page::Mods && s.mods.menu && self.mod_menu.key(key, text) {
+            return Vec::new();
         }
         if self.page() == Page::SplitProfiles && self.split_profiles.key(key, text) {
             return Vec::new();

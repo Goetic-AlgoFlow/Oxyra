@@ -455,6 +455,11 @@
   ],
   "hooks": [
     {
+      "name": "mod_menu",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_mod_menu"
+    },
+    {
       "name": "world_quads",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_world_quads"

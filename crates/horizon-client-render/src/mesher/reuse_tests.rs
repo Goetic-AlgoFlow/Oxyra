@@ -197,6 +197,7 @@ fn separate_ao_passes_ao_in_alpha_without_darkening_rgb() {
         cutout_leaves: true,
         translucent_layers: &[],
         leaf_culling: LeafCullingMode::Off,
+            hidden_blocks: &[],
     };
     let mesh = mesher.mesh(&region, 0);
     assert!(!mesh.solid.is_empty());

@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 361 lets a mod lay out Options > Mods as Mod Menu does (`native_mod_menu`).
+//!
 //! API 360 adds Oxyra's own points: world geometry beside the particles (`native_world_quads`),
 //! a Mods button (`native_mods_button`), inventory controls (`native_mouse_tweaks`), the portal
 //! view, its effects and outline (`native_portal_view`, `native_portal_effects`,
@@ -1053,7 +1055,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 360;
+pub(crate) const NATIVE_HOOKS_API: u32 = 361;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -9232,6 +9234,10 @@ impl Game<'_> {
         self.native_mods(&mut mods);
         // A WebAssembly mod of the same id: the native row stands for it,
         // and alone toggles its `mod.<id>` line.
+        // For testing the engine without the mod.
+        let mut menu = std::env::var_os("HORIZON_MOD_MENU").is_some();
+        self.native_mod_menu(&mut menu);
+        self.settings.mods.menu = menu;
         self.settings
             .mods
             .installed
@@ -9623,6 +9629,10 @@ impl Game<'_> {
     /// false to turn it off. API 90.
     pub(super) fn native_portal_effects(&self, particles: &mut bool, sound: &mut bool) {
         let _ = (particles, sound);
+    }
+    /// Whether Options > Mods is laid out as Mod Menu's: set to true. API 361.
+    pub(super) fn native_mod_menu(&self, menu: &mut bool) {
+        let _ = menu;
     }
     /// Whether a portal the window sees through keeps its block outline: set to true to keep
     /// it. API 91.

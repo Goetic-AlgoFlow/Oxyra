@@ -955,6 +955,7 @@ mod initial_history_tests {
             shadow_scene_revision: (0, 0),
             shadow_cache: false,
             water_plane: None,
+            portals: Vec::new(),
             weather: &[],
             weather_time: crate::weather::Time::new(0, 0.0),
             camera: glam::DVec3::new(0.5, 100.0, 0.5),
