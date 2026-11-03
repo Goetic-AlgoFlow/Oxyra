@@ -3670,6 +3670,14 @@ impl Game<'_> {
                     {
                         self.remote_item_data(p.id, stack);
                     }
+                }
+                // Entity.DATA_NO_GRAVITY, once the item exists (its stack, index 8, makes it).
+                if let Some((_, _, Value::Bool(no_gravity))) = p.values.iter().find(|v| v.0 == 5)
+                    && let Some(d) = self.dropped.iter_mut().find(|d| d.id == p.id as u32)
+                {
+                    d.no_gravity = *no_gravity;
+                }
+                for (index, _, value) in &p.values {
                     // ExperienceOrb.DATA_VALUE (the icon's size).
                     if *index == 8
                         && let Value::Int(v) = value

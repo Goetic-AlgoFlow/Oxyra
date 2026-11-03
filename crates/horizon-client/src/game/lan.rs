@@ -1756,6 +1756,11 @@ impl Game<'_> {
             if self.entity_glowing(d.id) {
                 e.meta.push((0, serializer::BYTE, Value::Byte(0x40)));
             }
+            // Entity.DATA_NO_GRAVITY: the guest's own tick moves the item between updates.
+            if d.no_gravity {
+                e.meta.push((5, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            e.defaults.push((5, serializer::BOOLEAN, Value::Bool(false)));
             e.meta.push((8, serializer::ITEM_STACK, Value::Item(stack)));
         }
         for o in self.orbs.iter().filter(|o| o.id > after) {
