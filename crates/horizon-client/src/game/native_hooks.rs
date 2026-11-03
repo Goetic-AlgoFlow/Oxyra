@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 366 lets a mod draw blocks itself in the block entities' pass, shaded as they are
+//! (`native_block_draws`, `native_draw_state`).
+//!
 //! API 365 lets a mod draw in the mobs' pass (`native_entity_quads`) with a mob's own vanilla
 //! geometry (`native_mob_vertices`).
 //!
@@ -1062,7 +1065,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 365;
+pub(crate) const NATIVE_HOOKS_API: u32 = 366;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -9742,6 +9745,12 @@ impl Game<'_> {
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
         let _ = (camera, partial, out);
+    }
+    /// Blocks a mod draws itself, in the block entities' pass and shaded as they are: under
+    /// `draw`'s pose, which starts at the camera (move it by a block's position minus `camera`),
+    /// with `native_draw_state`. Asked once a frame. API 366.
+    pub(super) fn native_block_draws(&self, camera: glam::DVec3, draw: &mut BlockEntityDraw) {
+        let _ = (camera, draw);
     }
     // Oxyra's helpers for native mods, which no hook point is.
     /// The mob `id` as its vanilla model draws it this frame (`partial` of a tick on): its feet in

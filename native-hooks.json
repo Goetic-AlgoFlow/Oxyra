@@ -470,6 +470,11 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_shared_mods"
     },
     {
+      "name": "block_draws",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_draws"
+    },
+    {
       "name": "entity_quads",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_quads"

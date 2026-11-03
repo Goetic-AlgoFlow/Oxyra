@@ -384,6 +384,24 @@ impl Game<'_> {
     }
 }
 
+impl Game<'_> {
+    /// `native_block_draws`: blocks a mod draws itself in the block entities' pass, after the
+    /// mods' block entities and shaded as they are (a door swinging open).
+    pub(super) fn mod_block_draws(&self, camera: DVec3, partial: f32, out: &mut Vec<Vertex>) {
+        let mut draw = BlockEntityDraw::posed(
+            partial,
+            self.world.game_time,
+            0,
+            [0; 3],
+            Mat4::IDENTITY,
+            diffuse_lights(self.dim == Dim::Nether),
+            std::mem::take(out),
+        );
+        self.native_block_draws(camera, &mut draw);
+        *out = draw.into_vertices();
+    }
+}
+
 /// Helpers for drawing mod block entities, kept as stable as the hook points.
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
@@ -454,6 +472,20 @@ impl Game<'_> {
     /// an entity's place: a block's baked model, with its default tints. A
     /// moving part that is no block is a standalone model
     /// (`native_draw_model`). False for an unknown block or property. API 71.
+    /// Draws the block state `state` under `draw`'s pose as `native_draw_block` does, lit as the
+    /// world is at `at`, and counted as a block entity of that state by shader packs. API 366.
+    pub(super) fn native_draw_state(
+        &self,
+        draw: &mut BlockEntityDraw,
+        state: BlockStateId,
+        at: [i32; 3],
+    ) {
+        self.mark_block_entity(draw.vertices.len(), state.0);
+        let light = vertex_light(self.world.light(at[0], at[1], at[2]));
+        let pose = draw.pose();
+        self.block_model_vertices(state, 42, pose, light, true, &mut draw.vertices);
+    }
+
     pub(super) fn native_draw_block(
         &self,
         draw: &mut BlockEntityDraw,
