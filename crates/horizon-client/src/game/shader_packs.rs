@@ -653,8 +653,8 @@ fn name_id(name: &str) -> i32 {
 
 /// `mc_Entity` (x, y) of each block sprite layer, as (id, fluid) pairs: terrain vertices carry
 /// their sprite layer, not their block. A layer takes the id of the block named like its sprite
-/// (`block/oak_leaves` for `oak_leaves`), else the id most blocks drawing it share (ties: the
-/// lowest); -1 when no block drawing it has one. y is 1 for the fluid sprites, -1 otherwise.
+/// (`block/oak_leaves` for `oak_leaves`), else the id most blocks drawing it share, the blocks the
+/// pack leaves out counting for none (ties: the lowest); -1 when that is none. y is 1 for the fluid sprites, -1 otherwise.
 pub(super) fn block_id_table(pack: &super::PackResources, ids: &BlockIds) -> Vec<i32> {
     use std::collections::{BTreeMap, BTreeSet};
     let layers = pack
@@ -681,10 +681,14 @@ pub(super) fn block_id_table(pack: &super::PackResources, ids: &BlockIds) -> Vec
             continue;
         };
         let block = state.name.strip_prefix("minecraft:").unwrap_or(&state.name);
-        let Some(id) = ids.id(&state.name, |k| state.properties.get(k).map(String::as_str)) else {
-            unlisted.insert(block);
-            continue;
-        };
+        // A block the pack leaves out votes for no id (-1): a pumpkin's sides, which a jack
+        // o'lantern shares, don't take the lantern's id and its light.
+        let id = ids
+            .id(&state.name, |k| state.properties.get(k).map(String::as_str))
+            .unwrap_or_else(|| {
+                unlisted.insert(block);
+                -1
+            });
         let mut vote = |layer: u32| {
             let named = pack
                 .layer_names
