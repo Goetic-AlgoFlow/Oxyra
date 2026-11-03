@@ -981,12 +981,53 @@ fn local_revision(dir: &Path) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// A personal build published on GitHub to build native mods on, as `owner/name@branch`: for
+/// players without its checkout ([`LOCAL_SOURCE`]). The branch's head is the build's revision.
+const REMOTE_SOURCE: &str = "HORIZON_NATIVE_REPO";
+
+fn remote_source() -> Option<(String, String)> {
+    let value = std::env::var(REMOTE_SOURCE).ok()?;
+    let (repo, branch) = value.trim().split_once('@')?;
+    Some((repo.to_owned(), branch.to_owned()))
+}
+
+/// The repository Horizon's source archives come from.
+fn source_repo() -> String {
+    remote_source().map_or_else(|| backend::REPO.to_owned(), |(repo, _)| repo)
+}
+
+/// The commit `repo`'s `branch` points at, from Git's ref advertisement: no API call, so no
+/// rate limit.
+fn remote_revision(repo: &str, branch: &str) -> Result<String, String> {
+    let url = format!("https://github.com/{repo}.git/info/refs?service=git-upload-pack");
+    let refs = backend::get(&url)?
+        .into_string()
+        .map_err(|e| e.to_string())?;
+    advertised(&refs, branch).ok_or_else(|| format!("{repo} has no branch {branch}"))
+}
+
+/// The commit of `refs/heads/<branch>` in a ref advertisement's pkt-lines.
+fn advertised(refs: &str, branch: &str) -> Option<String> {
+    let name = format!(" refs/heads/{branch}");
+    refs.match_indices(&name).find_map(|(at, _)| {
+        let after = &refs[at + name.len()..];
+        if !(after.starts_with('\n') || after.starts_with('\0')) {
+            return None;
+        }
+        let sha = refs.get(at.checked_sub(40)?..at)?;
+        sha.bytes()
+            .all(|b| b.is_ascii_hexdigit())
+            .then(|| sha.to_owned())
+    })
+}
+
 /// The native hook points' version of Horizon at `revision`, from GitHub (None: it has none).
 fn hooks_at(revision: &str) -> Option<u32> {
-    let url = format!(
-        "https://raw.githubusercontent.com/{}/{revision}/{HOOKS_FILE}",
-        backend::REPO
-    );
+    hooks_in_repo(backend::REPO, revision)
+}
+
+fn hooks_in_repo(repo: &str, revision: &str) -> Option<u32> {
+    let url = format!("https://raw.githubusercontent.com/{repo}/{revision}/{HOOKS_FILE}");
     let text = backend::get(&url).ok()?.into_string().ok()?;
     hooks_in(&text)
 }
@@ -1655,7 +1696,7 @@ fn source(revision: &str) -> Result<PathBuf, String> {
         None => {
             let archive = format!(
                 "https://codeload.github.com/{}/tar.gz/{revision}",
-                backend::REPO
+                source_repo()
             );
             unpack_archive(&archive, &partial, u64::MAX)?
         }
@@ -1884,7 +1925,14 @@ fn pipeline(
                 .and_then(|text| hooks_in(&text));
             with_hooks(&mods, head, false, || None, |_| api)?
         }
-        None => with_hooks(&mods, pinned, free, game, hooks_at)?,
+        None => match remote_source() {
+            Some((repo, branch)) => {
+                let head = remote_revision(&repo, &branch)?;
+                let api = hooks_in_repo(&repo, &head);
+                with_hooks(&mods, head, false, || None, |_| api)?
+            }
+            None => with_hooks(&mods, pinned, free, game, hooks_at)?,
+        },
     };
     let other = mismatch(&mods, &revision);
     if let (Some(list), false) = (&other, anyway) {
@@ -2385,6 +2433,21 @@ mod tests {
     static LOG_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     use super::*;
+
+    #[test]
+    fn a_branch_head_is_read_from_the_ref_advertisement() {
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        let refs = format!(
+            "001e# service=git-upload-pack\n0000\
+             0155{a} HEAD\0multi_ack side-band-64k\n\
+             003f{b} refs/heads/oxyra\n\
+             0046{a} refs/heads/oxyra-old\n0000"
+        );
+        assert_eq!(advertised(&refs, "oxyra"), Some(b));
+        assert_eq!(advertised(&refs, "oxyra-old"), Some(a));
+        assert_eq!(advertised(&refs, "main"), None);
+    }
 
     #[test]
     fn a_rebuild_leaves_the_old_builds_mod_data_behind() {
