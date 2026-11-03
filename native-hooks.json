@@ -465,6 +465,11 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_world_quads"
     },
     {
+      "name": "dropped_pose",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_dropped_pose"
+    },
+    {
       "name": "mods_button",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_mods_button"

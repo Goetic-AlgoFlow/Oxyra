@@ -1055,7 +1055,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 361;
+pub(crate) const NATIVE_HOOKS_API: u32 = 362;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -9589,6 +9589,16 @@ pub(crate) enum TooltipItemsPosition {
 
 
 impl Game<'_> {
+    /// How the dropped item `id`, of half size `half`, is drawn instead of bobbing and spinning:
+    /// its middle in the world and its rotation. API 362.
+    pub(super) fn native_dropped_pose(
+        &self,
+        id: u32,
+        half: glam::Vec3,
+        posed: &mut Option<(glam::DVec3, glam::Quat)>,
+    ) {
+        let _ = (id, half, posed);
+    }
     /// The world's own quads drawn with the particles (their atlas, `ParticleEngine::sprite`, and
     /// their blending): push four camera-relative vertices per quad. `partial` is the frame's
     /// part of a tick. API 81.

@@ -597,13 +597,32 @@ impl Game<'_> {
                 continue;
             }
             let age = item.age as f32 + partial;
-            let (lo, _) = state.bounding_box();
+            let (lo, hi) = state.bounding_box();
             let min_offset_y = -lo.y + 0.0625;
             let bob = (age / 10.0 + item.bob_offset).sin() * 0.1 + 0.1;
             let spin = item_render::item_spin(age, item.bob_offset);
-            let pose = glam::Mat4::from_translation(pos.as_vec3())
-                * glam::Mat4::from_translation(glam::Vec3::new(0.0, bob + min_offset_y, 0.0))
-                * glam::Mat4::from_rotation_y(spin);
+            let mut posed = None;
+            if entity {
+                self.native_dropped_pose(
+                    item.id,
+                    glam::Vec3::new(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z) * 0.5,
+                    &mut posed,
+                );
+            }
+            let pose = match posed {
+                Some((middle, rotation)) => {
+                    glam::Mat4::from_translation((middle - camera).as_vec3())
+                        * glam::Mat4::from_quat(rotation)
+                        * glam::Mat4::from_translation(
+                            glam::Vec3::new(lo.x + hi.x, lo.y + hi.y, lo.z + hi.z) * -0.5,
+                        )
+                }
+                None => {
+                    glam::Mat4::from_translation(pos.as_vec3())
+                        * glam::Mat4::from_translation(glam::Vec3::new(0.0, bob + min_offset_y, 0.0))
+                        * glam::Mat4::from_rotation_y(spin)
+                }
+            };
             let packed = self.world.light(
                 q.x.floor() as i32,
                 (q.y + 0.1).floor() as i32,
