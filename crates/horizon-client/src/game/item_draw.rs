@@ -603,11 +603,11 @@ impl Game<'_> {
             let spin = item_render::item_spin(age, item.bob_offset);
             let mut posed = None;
             if entity {
-                self.native_dropped_pose(
-                    item.id,
-                    glam::Vec3::new(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z) * 0.5,
-                    &mut posed,
-                );
+                let half = glam::Vec3::new(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z) * 0.5;
+                self.native_dropped_pose_at(item.id, glam::DVec3::from_array(at), half, &mut posed);
+                if posed.is_none() {
+                    self.native_dropped_pose(item.id, half, &mut posed);
+                }
             }
             let pose = match posed {
                 Some((middle, rotation)) => {
@@ -619,7 +619,11 @@ impl Game<'_> {
                 }
                 None => {
                     glam::Mat4::from_translation(pos.as_vec3())
-                        * glam::Mat4::from_translation(glam::Vec3::new(0.0, bob + min_offset_y, 0.0))
+                        * glam::Mat4::from_translation(glam::Vec3::new(
+                            0.0,
+                            bob + min_offset_y,
+                            0.0,
+                        ))
                         * glam::Mat4::from_rotation_y(spin)
                 }
             };

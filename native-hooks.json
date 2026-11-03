@@ -465,6 +465,16 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_world_quads"
     },
     {
+      "name": "shared_mods",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_shared_mods"
+    },
+    {
+      "name": "dropped_pose_at",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_dropped_pose_at"
+    },
+    {
       "name": "dropped_pose",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_dropped_pose"
@@ -1472,7 +1482,6 @@
       }
     },
     {
-<<<<<<< HEAD
       "name": "render_hand",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_render_hand",
@@ -4358,11 +4367,6 @@
       "mod_api": {
         "contract": "listen"
       }
-=======
-      "name": "tooltip_items",
-      "version": 2,
-      "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip_items"
->>>>>>> b95fc3455 (Native hooks 85: a tooltip's items drawn as ShulkerBoxTooltip draws them)
     }
   ]
 }

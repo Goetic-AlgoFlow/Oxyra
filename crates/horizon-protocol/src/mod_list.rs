@@ -32,6 +32,9 @@ pub enum Side {
     Server,
     /// Only the player's game: a HUD, keys, a minimap. Any server accepts it.
     Client,
+    /// A host that has it makes its players have it; a player who has it joins any server and
+    /// plays it alone there (a native mod with a client fallback, such as physical dropped items).
+    Hosted,
 }
 
 impl Side {
@@ -40,6 +43,7 @@ impl Side {
             Side::Both => 0,
             Side::Server => 1,
             Side::Client => 2,
+            Side::Hosted => 3,
         }
     }
 
@@ -48,6 +52,7 @@ impl Side {
             0 => Ok(Side::Both),
             1 => Ok(Side::Server),
             2 => Ok(Side::Client),
+            3 => Ok(Side::Hosted),
             _ => Err(Error::new(format!("mod list: side {code}"))),
         }
     }
@@ -87,12 +92,12 @@ pub fn local() -> Vec<Entry> {
     LOCAL.get().cloned().unwrap_or_default()
 }
 
-/// The entries the other side compares (`side = "both"`): what a join sends. Client-only
+/// The entries the other side compares (`both` and `hosted`): what a join sends. Client-only
 /// and server-only mods stay private, since any server can ask for the list.
 pub fn shared(entries: &[Entry]) -> Vec<Entry> {
     entries
         .iter()
-        .filter(|e| e.side == Side::Both)
+        .filter(|e| matches!(e.side, Side::Both | Side::Hosted))
         .cloned()
         .collect()
 }
@@ -186,12 +191,15 @@ impl Difference {
     }
 }
 
-/// What a client must change to join a server. Only `Both` mods count, on
-/// either side: a `Server` mod is the server's business, a `Client` one the
-/// player's.
+/// What a client must change to join a server. `Both` mods count on either side, a
+/// `Hosted` one only when the server has it: a `Server` mod is the server's business, a
+/// `Client` one the player's.
 pub fn compare(server: &[Entry], client: &[Entry]) -> Difference {
     let mut difference = Difference::default();
-    for s in server.iter().filter(|s| s.side == Side::Both) {
+    for s in server
+        .iter()
+        .filter(|s| matches!(s.side, Side::Both | Side::Hosted))
+    {
         match client.iter().find(|c| c.id == s.id) {
             None => difference.missing.push(format!("{} {}", s.id, s.version)),
             Some(c) => {
@@ -326,6 +334,25 @@ mod tests {
         ];
         assert!(compare(&server, &client).is_empty());
         assert!(compare(&[], &[entry("minimap", "3", 3, Side::Client)]).is_empty());
+    }
+
+    #[test]
+    fn a_hosted_mod_is_required_by_its_host_only() {
+        let dropz = entry("dropz", "0.3.0", 1, Side::Hosted);
+        let d = compare(std::slice::from_ref(&dropz), &[]);
+        assert_eq!(d.missing, ["dropz 0.3.0"]);
+        assert!(compare(&[], std::slice::from_ref(&dropz)).is_empty());
+        assert!(compare(std::slice::from_ref(&dropz), std::slice::from_ref(&dropz)).is_empty());
+        let older = entry("dropz", "0.2.0", 1, Side::Hosted);
+        assert_eq!(
+            compare(std::slice::from_ref(&dropz), &[older]).changed,
+            ["dropz (server 0.3.0, yours 0.2.0)"]
+        );
+        assert_eq!(shared(std::slice::from_ref(&dropz)), [dropz.clone()]);
+        assert_eq!(
+            decode(&encode(std::slice::from_ref(&dropz))).unwrap(),
+            [dropz]
+        );
     }
 
     #[test]

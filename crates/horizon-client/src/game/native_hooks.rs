@@ -1055,7 +1055,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 362;
+pub(crate) const NATIVE_HOOKS_API: u32 = 363;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -2699,6 +2699,13 @@ impl Game<'_> {
     /// Asked once at start, on every side. API 145.
     pub(super) fn native_items(items: &mut Vec<horizon_mods::content::Item>) {
         mod_api::dispatch_items(mod_api::mods(), items);
+    }
+    /// The native mods a joining player is compared on (`horizon_protocol::mod_list`): push an
+    /// entry per mod that must match, `Side::Both` (both halves must have it) or `Side::Hosted`
+    /// (a host that has it makes its players have it; a player who has it joins anyone), with no
+    /// SHA-256 (the version is compared). Asked once at start, on every side. API 363.
+    pub(super) fn native_shared_mods(mods: &mut Vec<horizon_protocol::mod_list::Entry>) {
+        let _ = mods;
     }
     /// Models no blockstate names that this client bakes beside the block
     /// models (NeoForge's `ModelEvent.RegisterStandalone`): push their ids
@@ -9587,7 +9594,7 @@ pub(crate) enum TooltipItemsPosition {
     OutsideBottom,
 }
 
-
+/// Oxyra's hook points (API 360 on), after Horizon's.
 impl Game<'_> {
     /// How the dropped item `id`, of half size `half`, is drawn instead of bobbing and spinning:
     /// its middle in the world and its rotation. API 362.
@@ -9598,6 +9605,18 @@ impl Game<'_> {
         posed: &mut Option<(glam::DVec3, glam::Quat)>,
     ) {
         let _ = (id, half, posed);
+    }
+    /// `native_dropped_pose` with where the item is drawn this frame: `feet`, its position between
+    /// the last two ticks, as vanilla draws it. Asked first; `native_dropped_pose` is asked when this
+    /// leaves `posed` empty. API 363.
+    pub(super) fn native_dropped_pose_at(
+        &self,
+        id: u32,
+        feet: glam::DVec3,
+        half: glam::Vec3,
+        posed: &mut Option<(glam::DVec3, glam::Quat)>,
+    ) {
+        let _ = (id, feet, half, posed);
     }
     /// The world's own quads drawn with the particles (their atlas, `ParticleEngine::sprite`, and
     /// their blending): push four camera-relative vertices per quad. `partial` is the frame's
@@ -9694,6 +9713,7 @@ impl Game<'_> {
     ) {
         let _ = (stack, lockable, items);
     }
+    // Oxyra's helpers for native mods, which no hook point is.
     /// Whether key `key` (`key.keyboard.left.shift`) is held now, as `InputConstants.isKeyDown`
     /// answers. API 85.
     pub(super) fn native_key_down(&self, key: &str) -> bool {
@@ -10326,9 +10346,17 @@ mod tests {
         let hunger_hooks = free_hooks(include_str!("../hunger.rs"));
         let landing_hooks = free_hooks(include_str!("../landing.rs"));
         let motion_hooks = free_hooks(include_str!("../motion.rs"));
+        let oxyra_section = source
+            .split("/// Oxyra's hook points (API 360 on), after Horizon's.")
+            .nth(1)
+            .unwrap()
+            .split("// Oxyra's helpers for native mods, which no hook point is.")
+            .next()
+            .unwrap();
         let declared: BTreeSet<_> = section
             .lines()
             .chain(level_section.lines())
+            .chain(oxyra_section.lines())
             .filter_map(|line| {
                 line.trim()
                     .strip_prefix("pub(super) fn native_")?

@@ -152,6 +152,7 @@ pub(super) fn content_root(
     match mod_content::resource_root(root, &mods, &here.join(".horizon-cache")) {
         Ok(out) => {
             if announce {
+                Game::native_shared_mods(&mut announced);
                 horizon_protocol::mod_list::set_local(announced);
             }
             if out != root {
