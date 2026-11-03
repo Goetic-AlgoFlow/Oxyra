@@ -1,9 +1,9 @@
 # Horizon extras
 
 Optional conveniences built into the client: fullbright, dynamic lights, your own name tag, hiding block-break particles, auto-reconnect,
-Mouse Tweaks-style inventory controls, inventory sorting and a smooth chat. **Every one is off by default**: a fresh
-install looks and behaves exactly like vanilla 26.3, and turning an extra off
-again restores vanilla's behaviour completely.
+Mouse Tweaks-style inventory controls, inventory sorting and a smooth chat. **Every one is off by default
+except dynamic lights**: a fresh install otherwise looks and behaves like vanilla 26.3, and turning an
+extra off again restores vanilla's behaviour completely.
 
 ## Where they live
 
@@ -45,7 +45,7 @@ in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
 - Turning it off restores the normal lightmap using the current brightness,
   time of day and effects. The brightness slider keeps its normal range.
 
-### Dynamic lights (`dynamicLights`, default off)
+### Dynamic lights (`dynamicLights`, default on)
 - A light source held by a player or mob (main or off hand), dropped as an item, or an entity on
   fire lights the blocks, entities and hand around it, as dynamic-light mods do. Not
   in vanilla; the idea is ported, not a mod's code (issue #814).

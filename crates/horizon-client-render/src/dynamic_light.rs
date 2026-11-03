@@ -1,6 +1,6 @@
 //! Horizon Extras' dynamic lights (docs/extras.md): a torch, lantern or other light source held by
 //! a player or mob, dropped as an item, or an entity on fire lights the blocks and entities
-//! around it. Not in vanilla; off by default.
+//! around it. Not in vanilla; on by default.
 //!
 //! Client-only and at render time: the light engine, chunk meshes and saves never see it. Each
 //! frame the game picks the [`MAX`] sources nearest the camera; terrain.wgsl and entity.wgsl
