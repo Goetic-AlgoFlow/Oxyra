@@ -36,6 +36,9 @@ const IDLE_TICKS: u32 = 300;
 
 /// A level that is not in place: every per-level field of `Game`.
 pub(super) struct Parked {
+    /// Sounds its tick played after the tick's flush (`tick_lan` comes before `tick_end`): told
+    /// to its own players at its next flush, not to those of the next level to run.
+    captured: Vec<(String, [f64; 3], f32, f32)>,
     world: World,
     streaming: Streaming,
     locator: Option<Arc<VanillaTerrain>>,
@@ -201,6 +204,7 @@ impl Game<'_> {
             others: Vec::new(),
             boats: Vec::new(),
             carts: Vec::new(),
+            captured: Vec::new(),
             jukebox_sounds: HashMap::new(),
             bolts: Vec::new(),
             crystals: Vec::new(),
@@ -260,6 +264,9 @@ impl Game<'_> {
         swap(&mut self.jukebox_sounds, &mut p.jukebox_sounds);
         swap(&mut self.bolts, &mut p.bolts);
         swap(&mut self.crystals, &mut p.crystals);
+        if let Some(capture) = &mut self.audio.capture {
+            swap(capture, &mut p.captured);
+        }
         swap(&mut self.dragon, &mut p.dragon);
         swap(&mut self.dragon_fireballs, &mut p.dragon_fireballs);
         swap(&mut self.breath_clouds, &mut p.breath_clouds);

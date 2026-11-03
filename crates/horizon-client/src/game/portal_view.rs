@@ -27,7 +27,7 @@ const RANGE: i32 = 48;
 /// How far from the player a portal stays drawn, plain, past that.
 const PLAIN_RANGE: i32 = 128;
 /// How many portals deep a view goes: 1 sees through the portals in the window only.
-const DEPTH: usize = 3;
+const DEPTH: usize = horizon_client::gfx::MAX_PORTAL_VIEWS;
 /// How many chunks around the exit go into a snapshot, each way.
 pub(super) const VIEW_CHUNKS: i32 = 8;
 /// How soon a column seen through the portal is meshed again after a change: the server's light
@@ -1006,10 +1006,14 @@ impl Game<'_> {
             // face, which it covers.
             None => {
                 let top = base + DVec3::new(w / 2.0, 0.75, h / 2.0);
-                if view.request.to != Dim::End || camera.y <= top.y {
+                // From under it too: the opening a hair below the block, looking up from the
+                // carried camera.
+                let above = camera.y > top.y;
+                if view.request.to != Dim::End || !(above || camera.y < base.y) {
                     return None;
                 }
-                let corner = |a: f64, b: f64| base + DVec3::new(a, 0.75 + 1.0 / 256.0, b);
+                let plane = if above { 0.75 + 1.0 / 256.0 } else { -1.0 / 256.0 };
+                let corner = |a: f64, b: f64| base + DVec3::new(a, plane, b);
                 (
                     top,
                     DVec3::new(
@@ -1094,7 +1098,14 @@ impl Game<'_> {
                 normal.x as f32,
                 normal.y as f32,
                 normal.z as f32,
-                normal.dot(offset) as f32,
+                // The End's platform, a block thick under where the crossing lands, is left out: a
+                // look down the portal would show only its obsidian, not the End.
+                (normal.dot(offset)
+                    - if entry.x_axis.is_none() && offset.y > 0.0 {
+                        1.01
+                    } else {
+                        0.0
+                    }) as f32,
             ],
             opening: opening.map(|c| c + DVec3::X * east),
             dimension: match view.request.to {

@@ -8047,7 +8047,7 @@ impl Renderer {
             );
         }
         let celestial_vertices = frame.celestial.len().min(2048 * 4);
-        if frame.end_sky && !frame.title {
+        if (frame.end_sky || frame.portals.iter().any(|p| p.dimension == 1)) && !frame.title {
             self.end_sky.prepare(&self.device, frame.end_sky_sprite);
         }
         if celestial_vertices > 0 {
@@ -8893,6 +8893,13 @@ impl Renderer {
                 });
                 if let Some([x, y, w, h]) = holder.scissor {
                     pass.set_scissor_rect(x, y, w, h);
+                }
+                // The End's sky box behind everything, around the carried camera.
+                if p.dimension == 1 {
+                    pass.set_pipeline(&self.celestial_pipeline);
+                    pass.set_bind_group(0, &holder.entity_group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    self.end_sky.draw(&mut pass);
                 }
                 pass.set_bind_group(0, &holder.group, &[]);
                 pass.set_pipeline(&self.solid_portal);
