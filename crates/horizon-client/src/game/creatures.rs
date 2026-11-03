@@ -6655,6 +6655,8 @@ impl Game<'_> {
         }
         // What follows isn't a tracked mob: close the last one's span.
         self.mark_motion(out.len(), 0);
+        // `native_entity_quads`: a mod's own geometry in the mobs' pass (a dead mob's falling parts).
+        self.native_entity_quads(camera, alpha as f32, out);
         self.elder_apparition_geometry(alpha, out);
         self.spawner_geometry(camera, alpha, out);
         // Projectiles: the baked vanilla arrow model, the rest as item billboards.

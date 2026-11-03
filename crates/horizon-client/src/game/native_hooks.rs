@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 365 lets a mod draw in the mobs' pass (`native_entity_quads`) with a mob's own vanilla
+//! geometry (`native_mob_vertices`).
+//!
 //! API 364 tells a client's mods of the blocks that change in its world
 //! (`native_client_block_changed`) and lets them draw one themselves for a while
 //! (`native_hide_block`).
@@ -1059,7 +1062,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 364;
+pub(crate) const NATIVE_HOOKS_API: u32 = 365;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -9728,7 +9731,54 @@ impl Game<'_> {
     ) {
         let _ = (pos, old, new);
     }
+    /// A mod's own geometry, drawn with the mobs after them: their atlas (the entities',
+    /// `native_mob_vertices` gives texture coordinates in it), their lighting and their passes.
+    /// Push camera-relative vertices, four a quad. `partial` is the frame's part of a tick.
+    /// API 365.
+    pub(super) fn native_entity_quads(
+        &self,
+        camera: glam::DVec3,
+        partial: f32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        let _ = (camera, partial, out);
+    }
     // Oxyra's helpers for native mods, which no hook point is.
+    /// The mob `id` as its vanilla model draws it this frame (`partial` of a tick on): its feet in
+    /// the world, and its vertices relative to them, four a quad, textured in the entities' atlas
+    /// (`native_entity_quads` draws them). None for a mob this game doesn't have. API 365.
+    pub(super) fn native_mob_vertices(
+        &self,
+        id: u32,
+        partial: f32,
+    ) -> Option<(glam::DVec3, Vec<horizon_client::mesher::Vertex>)> {
+        let mob = self.mobs.iter().find(|m| m.id == id)?;
+        let a = f64::from(partial);
+        let feet = glam::DVec3::new(
+            mob.previous.x + (mob.position.x - mob.previous.x) * a,
+            mob.previous.y + (mob.position.y - mob.previous.y) * a,
+            mob.previous.z + (mob.position.z - mob.previous.z) * a,
+        );
+        let atlas = &self.gui.atlas;
+        let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        let light = self.world.light(
+            feet.x.floor() as i32,
+            (feet.y + mob.eye_height()).floor() as i32,
+            feet.z.floor() as i32,
+        );
+        let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+        let mut out = Vec::new();
+        horizon_client::mobs::render::render(
+            mob,
+            partial,
+            feet,
+            &lookup,
+            packed,
+            self.res.mob_data(),
+            &mut out,
+        );
+        Some((feet, out))
+    }
     /// Leaves the block at `pos` out of the world's meshes while a mod draws it itself (a door
     /// swinging, `native_world_quads`), or puts it back (`hidden` false). API 364.
     pub(super) fn native_hide_block(&mut self, pos: [i32; 3], hidden: bool) {
