@@ -2448,6 +2448,9 @@ impl Game<'_> {
         if self.world.loaded(pos[0], pos[2])
             && self.world.set(pos[0], pos[1], pos[2], state).is_ok()
         {
+            if previous != state {
+                self.native_client_block_changed(pos, previous, state);
+            }
             self.sync_block_entity((pos[0], pos[1], pos[2]), Some(previous), state);
             // LevelChunk.setBlockState removes the block entity of a block
             // that changes: the moving piston the client's moveBlocks made

@@ -470,6 +470,11 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_shared_mods"
     },
     {
+      "name": "client_block_changed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_client_block_changed"
+    },
+    {
       "name": "dropped_pose_at",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_dropped_pose_at"

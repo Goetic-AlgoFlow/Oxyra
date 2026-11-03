@@ -6,6 +6,10 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 364 tells a client's mods of the blocks that change in its world
+//! (`native_client_block_changed`) and lets them draw one themselves for a while
+//! (`native_hide_block`).
+//!
 //! API 361 lets a mod lay out Options > Mods as Mod Menu does (`native_mod_menu`).
 //!
 //! API 360 adds Oxyra's own points: world geometry beside the particles (`native_world_quads`),
@@ -1055,7 +1059,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 363;
+pub(crate) const NATIVE_HOOKS_API: u32 = 364;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -9713,7 +9717,25 @@ impl Game<'_> {
     ) {
         let _ = (stack, lockable, items);
     }
+    /// The block at `pos` changed from `old` to `new` in this game's world as the player sees it:
+    /// a server's update, a section's updates, or this game's own prediction (a door the player
+    /// opens). On a client, where `native_block_changed` never runs. API 364.
+    pub(super) fn native_client_block_changed(
+        &mut self,
+        pos: [i32; 3],
+        old: BlockStateId,
+        new: BlockStateId,
+    ) {
+        let _ = (pos, old, new);
+    }
     // Oxyra's helpers for native mods, which no hook point is.
+    /// Leaves the block at `pos` out of the world's meshes while a mod draws it itself (a door
+    /// swinging, `native_world_quads`), or puts it back (`hidden` false). API 364.
+    pub(super) fn native_hide_block(&mut self, pos: [i32; 3], hidden: bool) {
+        horizon_client::mesher::set_hidden_at(pos, hidden);
+        let sy = (pos[1] - self.world.bottom_y()) >> 4;
+        self.world.dirty_sections.insert((pos[0] >> 4, sy, pos[2] >> 4));
+    }
     /// Whether key `key` (`key.keyboard.left.shift`) is held now, as `InputConstants.isKeyDown`
     /// answers. API 85.
     pub(super) fn native_key_down(&self, key: &str) -> bool {

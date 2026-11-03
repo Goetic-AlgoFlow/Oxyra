@@ -1345,6 +1345,39 @@ fn pack_rgb([r, g, b]: [u32; 3]) -> u32 {
 fn pack_coords(coords: u32) -> u16 {
     ((coords >> 16 & 0xFF) | (coords & 0xFF) << 8) as u16
 }
+/// Blocks a mod draws itself for a while (a door swinging open): their sections leave them out.
+static HIDDEN_AT: std::sync::RwLock<Vec<[i32; 3]>> = std::sync::RwLock::new(Vec::new());
+
+/// Leaves the block at `pos` out of the meshes (`hidden`), or puts it back. Its section must be
+/// meshed again for the change to show.
+pub fn set_hidden_at(pos: [i32; 3], hidden: bool) {
+    let mut at = HIDDEN_AT.write().unwrap_or_else(|e| e.into_inner());
+    at.retain(|p| *p != pos);
+    if hidden {
+        at.push(pos);
+    }
+}
+
+/// The hidden blocks in the section whose lowest corner is `[chunk x, y, chunk z]`.
+fn hidden_in_section([cx, y, cz]: [i32; 3]) -> Vec<[i32; 3]> {
+    let at = HIDDEN_AT.read().unwrap_or_else(|e| e.into_inner());
+    at.iter()
+        .filter(|p| p[0] >> 4 == cx && p[2] >> 4 == cz && (y..y + 16).contains(&p[1]))
+        .copied()
+        .collect()
+}
+
+#[cfg(test)]
+#[test]
+fn a_hidden_block_is_left_out_of_its_own_section_only() {
+    set_hidden_at([17, 70, -3], true);
+    assert!(hidden_in_section([1, 64, -1]).contains(&[17, 70, -3]));
+    assert!(!hidden_in_section([0, 64, -1]).contains(&[17, 70, -3]));
+    assert!(!hidden_in_section([1, 80, -1]).contains(&[17, 70, -3]));
+    set_hidden_at([17, 70, -3], false);
+    assert!(!hidden_in_section([1, 64, -1]).contains(&[17, 70, -3]));
+}
+
 pub struct Mesher<'a> {
     /// CardinalLighting.NETHER: brighter up/down faces.
     pub nether_shading: bool,
@@ -1424,6 +1457,7 @@ impl Mesher<'_> {
         let full_faces = &self.tables.full_faces;
         let catalog = &self.render.model_catalog;
         let mut models = Vec::new();
+        let hidden_here = hidden_in_section([center.x, base_y, center.z]);
         for y in 0..16 {
             for z in 0..16 {
                 for x in 0..16 {
@@ -1452,7 +1486,15 @@ impl Mesher<'_> {
                         );
                         fluid::tesselate(self.tables, shade, pad, water, &mut out, [x, y, z]);
                     }
-                    if !state.model || self.hidden_blocks.contains(&id) {
+                    if !state.model
+                        || self.hidden_blocks.contains(&id)
+                        || (!hidden_here.is_empty()
+                            && hidden_here.contains(&[
+                                center.x * 16 + x,
+                                base_y + y,
+                                center.z * 16 + z,
+                            ]))
+                    {
                         continue;
                     }
                     if let Some(&mark) = self.voxel_marks.get(id as usize)
