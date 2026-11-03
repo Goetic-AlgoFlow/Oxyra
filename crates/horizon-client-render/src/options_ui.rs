@@ -2421,20 +2421,11 @@ impl OptionsUi {
                 let open =
                     |key: &str, page: Page| button(0.0, 0.0, 150.0, tr(key), Act::Push(page));
                 vec![
-                    Row::Buttons(
-                        open("horizon.pages.open.graphics", Page::Graphics),
-                        Some(open(
-                            "horizon.pages.open.graphics_advanced",
-                            Page::GraphicsAdvanced,
-                        )),
-                    ),
+                    // Only what no other page opens: graphics are under Video Settings, the
+                    // controller under Controls, mods on the main page.
                     Row::Buttons(
                         open("horizon.pages.open.shader_packs", Page::ShaderPacks),
-                        Some(open("horizon.pages.open.controller", Page::Controller)),
-                    ),
-                    Row::Buttons(
-                        open("horizon.pages.open.extras", Page::Extras),
-                        Some(open("horizon.pages.open.mods", Page::Mods)),
+                        Some(open("horizon.pages.open.extras", Page::Extras)),
                     ),
                     Row::Buttons(
                         open(
@@ -7149,12 +7140,8 @@ mod tests {
         assert_eq!(
             pushes(&mut ui),
             [
-                Page::Graphics,
-                Page::GraphicsAdvanced,
                 Page::ShaderPacks,
-                Page::Controller,
                 Page::Extras,
-                Page::Mods,
                 Page::SplitSetup,
                 Page::Agent,
             ]

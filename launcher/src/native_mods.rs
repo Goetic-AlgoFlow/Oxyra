@@ -966,7 +966,7 @@ fn local_source() -> Option<PathBuf> {
 }
 
 fn local_revision(dir: &Path) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::process::command("git")
         .arg("-C")
         .arg(dir)
         .args(["rev-parse", "HEAD"])
@@ -1670,7 +1670,7 @@ fn source(revision: &str) -> Result<PathBuf, String> {
 /// The local checkout's commit `revision` as `git archive` writes it, unpacked into `partial` as
 /// GitHub's archive is (its one top folder returned).
 fn local_archive(checkout: &Path, revision: &str, partial: &Path) -> Result<PathBuf, String> {
-    let mut child = Command::new("git")
+    let mut child = crate::process::command("git")
         .arg("-C")
         .arg(checkout)
         .args(["archive", "--format=tar", "--prefix=source/", revision])

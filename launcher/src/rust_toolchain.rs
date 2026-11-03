@@ -452,7 +452,7 @@ pub fn linker_server() -> Result<(), String> {
 
 fn link(full: bool) -> Result<(), String> {
     let ok = |program: &str, args: &[&str]| {
-        Command::new(program)
+        crate::process::command(program)
             .args(args)
             .output()
             .is_ok_and(|o| o.status.success())

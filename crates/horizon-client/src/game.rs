@@ -2456,6 +2456,25 @@ struct Game<'a> {
     /// A portal crossed with the level behind it meshed: when, and the columns whose meshes
     /// stand in until the server's chunks come (`Game::mesh_portal_view`).
     portal_crossed: Option<(Instant, horizon_client::fast_hash::FxHashSet<(i32, i32)>)>,
+    /// A crossing's meshes still to upload, the nearest last: the section, its key in the
+    /// region's cache, its mesh.
+    portal_stand_ins: Vec<(
+        horizon_client::gfx::SectionKey,
+        (i32, i32, i32),
+        horizon_client::mesher::SectionMesh,
+    )>,
+    /// The side of the portal the camera is in that it came in from (`portal_side`).
+    portal_side: std::cell::Cell<Option<(horizon_core::position::BlockPos, bool)>>,
+    /// The portal the camera is in this frame.
+    portal_hop: std::cell::Cell<Option<portal_view::PortalHop>>,
+    /// The landing of the crossing under way.
+    portal_jump: Option<portal_view::PortalJump>,
+    /// Meshes of the levels behind portals waiting to go up: their level's tag, section, mesh.
+    portal_meshed: std::collections::VecDeque<(
+        u8,
+        (i32, i32, i32),
+        horizon_client::mesher::SectionMesh,
+    )>,
     /// The glowing entities' silhouettes this frame (game/glowing.rs).
     glowing_vertices: std::cell::RefCell<Vec<Vertex>>,
     /// The shader pack's entity and block entity ids, while one draws entities.
@@ -10667,8 +10686,9 @@ impl Game<'_> {
         self.mark_translucent_entity(out.len(), "minecraft:entity_shadow");
         // A native shader pack's sun shadows already fall under the entities in the Overworld:
         // the round blob would be a second one. The Nether and the End have no sun to cast them.
-        let pack_shadows =
-            self.dim == Dim::Overworld && self.renderer.as_ref().is_some_and(|r| r.native_shadow());
+        let pack_shadows = self.renderer.as_ref().is_some_and(|r| {
+            r.pack_shadows() || (self.dim == Dim::Overworld && r.native_shadow())
+        });
         let shadow_sprite = (self.settings.entity_shadows && !pack_shadows)
             .then(|| self.gui.atlas.sprites.get("misc/shadow").copied())
             .flatten();
@@ -16449,7 +16469,7 @@ impl Game<'_> {
         {
             log::warn!("Horizon: failed to save unloaded chunks: {e}");
         }
-        self.mesh_portal_view();
+        horizon_client::spans::time("portal_view", || self.mesh_portal_view());
         let (far_distance, far_reduced) = self.far_terrain_choice();
         // Terrain still on its way from the server (single player's integrated one
         // too): the view's outermost columns not all in, or its events not all handled.
@@ -18466,6 +18486,11 @@ impl<'a> Game<'a> {
             portal_meshes: Default::default(),
             portal_view_on: (false, false),
             portal_crossed: None,
+            portal_stand_ins: Vec::new(),
+            portal_side: Default::default(),
+            portal_hop: Default::default(),
+            portal_jump: None,
+            portal_meshed: Default::default(),
             glowing_vertices: Default::default(),
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),

@@ -981,6 +981,8 @@ pub struct Renderer {
     /// The shader pack's programs for the levels seen through portals, by dimension.
     view_packs: std::cell::RefCell<Vec<(i32, pack_post::PackPost)>>,
     portal_opening: wgpu::RenderPipeline,
+    /// A shader pack's depth into the world's depth target, before its openings.
+    portal_pack_depth: wgpu::RenderPipeline,
     portal_opening_bindings: wgpu::BindGroupLayout,
     entity_pipeline: wgpu::RenderPipeline,
     static_entity_pipeline: wgpu::RenderPipeline,
@@ -3953,6 +3955,37 @@ impl Renderer {
             label: Some("Portal opening"),
             source: wgpu::ShaderSource::Wgsl(include_str!("portal_opening.wgsl").into()),
         });
+        let portal_pack_depth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Portal pack depth"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("portal_pack_depth.wgsl").into()),
+        });
+        let portal_pack_depth = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Portal pack depth"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &portal_pack_depth_shader,
+                entry_point: Some("vs_depth"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &portal_pack_depth_shader,
+                entry_point: Some("fs_depth"),
+                compilation_options: Default::default(),
+                targets: &[],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let portal_opening = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Portal opening"),
             layout: Some(
@@ -4288,6 +4321,7 @@ impl Renderer {
             portal_slots,
             view_packs: Default::default(),
             portal_opening,
+            portal_pack_depth,
             portal_opening_bindings,
             entity_pipeline,
             static_entity_pipeline,
@@ -4744,6 +4778,14 @@ impl Renderer {
     }
     /// Whether one of Horizon's own packs with `[shadow]` draws, whose shadow pass takes the
     /// frame's `shadow_only` quads.
+    /// Whether the shader pack in use has a shadow pass (Iris and OptiFine then drop the
+    /// round blob under entities).
+    pub fn pack_shadows(&self) -> bool {
+        self.pack_post
+            .as_ref()
+            .and_then(|p| p.1.as_ref())
+            .is_some_and(pack_post::PackPost::has_shadow)
+    }
     pub fn native_shadow(&self) -> bool {
         self.native.as_ref().is_some_and(|n| n.shadow.is_some())
     }
@@ -4988,10 +5030,36 @@ impl Renderer {
         active: &[usize],
         target: &wgpu::TextureView,
         depth: &wgpu::TextureView,
+        pack_depth: Option<&wgpu::TextureView>,
         size: [u32; 2],
     ) {
         if active.is_empty() || size != [self.config.width, self.config.height] {
             return;
+        }
+        if let Some(pack_depth) = pack_depth {
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Portal pack depth"),
+                layout: &self.portal_pack_depth.get_bind_group_layout(0),
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(pack_depth),
+                }],
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Portal pack depth"),
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.portal_pack_depth);
+            pass.set_bind_group(0, &group, &[]);
+            pass.draw(0..3, 0..1);
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Portal openings"),
@@ -8084,12 +8152,15 @@ impl Renderer {
                 let sorted = &self.sorted_indices;
                 let phase2 = self.cull.as_ref().filter(|_| culling).map(|c| &c.phase2);
                 crate::spans::time("flatten", || {
+                    // The portal views' draws follow the shadow camera's: never in a flat list, or
+                    // a shader pack's shadow pass would draw (and voxelize) the level behind.
+                    let flat_end = (shadow_first + shadow_solid + shadow_translucent) as usize;
                     flat.prepare(
                         &self.device,
                         &mut encoder,
                         &mut self.uploads,
-                        &self.draws,
-                        &self.draw_pages,
+                        &self.draws[..flat_end],
+                        &self.draw_pages[..flat_end],
                         phase1_draws as usize,
                         solid_draws as usize,
                         [shadow_first, shadow_first + shadow_solid].map(|d| d as usize),
@@ -9843,6 +9914,7 @@ impl Renderer {
                 &mut terrain,
             );
             post.flush_uniforms(&self.queue);
+            let pack_depth = post.depth_view().cloned();
             self.pack_post = Some((dimension, Some(post)));
             self.portal_openings_over(
                 &mut encoder,
@@ -9850,6 +9922,7 @@ impl Renderer {
                 &active_portals,
                 &view_target,
                 depth,
+                pack_depth.as_ref(),
                 size,
             );
         } else if let Some((color, depth)) = &scaled
@@ -9874,6 +9947,7 @@ impl Renderer {
                 &active_portals,
                 &view_target,
                 depth,
+                None,
                 size,
             );
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {

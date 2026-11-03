@@ -1372,6 +1372,9 @@ pub struct Mesher<'a> {
     /// Block states drawn elsewhere: portals seen through have no faces, in any pass, shadows
     /// included.
     pub hidden_blocks: &'a [u32],
+    /// By block state, the id-table entry of its voxel mark (`voxel_mark`), 0 for none; empty
+    /// without a shader pack that needs them.
+    pub voxel_marks: &'a [u16],
 }
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
@@ -1451,6 +1454,11 @@ impl Mesher<'_> {
                     }
                     if !state.model || self.hidden_blocks.contains(&id) {
                         continue;
+                    }
+                    if let Some(&mark) = self.voxel_marks.get(id as usize)
+                        && mark != 0
+                    {
+                        voxel_mark(&mut out, [x, y, z], mark);
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);
                     if catalog
@@ -1854,6 +1862,25 @@ impl Mesher<'_> {
         }
         target.extend(v);
     }
+}
+/// A quad too small to cover a pixel at the block's middle, `layer` naming the block's own entry
+/// in a shader pack's id table. A pack voxelizing in its shadow pass writes one id per cell from
+/// each vertex, and vertices name sprites, not blocks: of a block with sprites of other blocks
+/// (a beacon's glass) any could win each frame, and its light flickers. These draw last, among
+/// the translucent quads, so the block's id wins.
+fn voxel_mark(out: &mut SectionMesh, [x, y, z]: [i32; 3], layer: u16) {
+    const SIZE: f32 = 1.0 / 16384.0;
+    let at = |dx: f32, dz: f32| {
+        TerrainVertex::new(
+            [x as f32 + 0.5 + dx, y as f32 + 0.6, z as f32 + 0.5 + dz],
+            [0.0, 0.0],
+            layer,
+            u32::MAX,
+            0,
+        )
+    };
+    out.translucent
+        .extend([at(0.0, 0.0), at(0.0, SIZE), at(SIZE, SIZE), at(SIZE, 0.0)]);
 }
 /// The cuts of a `ctm_compact` face, in quad parameters, without allocating: the first `.1`
 /// of `.0`.

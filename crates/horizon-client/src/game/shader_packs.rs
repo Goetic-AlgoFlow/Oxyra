@@ -207,6 +207,10 @@ impl Game<'_> {
             self.streaming.shader_pack_lighting = pack_lighting;
             self.all_sections_changed();
         }
+        if self.pack_ids.is_none() && !self.streaming.voxel_marks.is_empty() {
+            self.streaming.voxel_marks = Vec::new().into();
+            self.all_sections_changed();
+        }
         let separate_ao = self.pack_ids.as_ref().is_some_and(|ids| ids.separate_ao);
         if self.streaming.separate_ao != separate_ao {
             self.streaming.separate_ao = separate_ao;
@@ -243,6 +247,7 @@ impl Game<'_> {
             let started = std::time::Instant::now();
             // A pack is not the game's own code: one that makes the shader compiler (or our
             // translation of it) panic is turned off instead of crashing every world load (#3525).
+            let marks = self.streaming.voxel_marks.clone();
             let loaded = horizon_client::crash::contain(|| {
                 match Pack::open(&path).map(|p| p.with_chosen(chosen_shader_options(name))) {
                     Ok(pack) => {
@@ -319,10 +324,16 @@ impl Game<'_> {
                             block_states: RefCell::default(),
                         });
                         let started_ids = std::time::Instant::now();
-                        let table = terrain_table(
+                        let mut table = terrain_table(
                             &block_id_table(&self.pack, &ids),
                             &block_emission_table(&self.pack),
                         );
+                        let marks: std::sync::Arc<[u16]> = if post.images.is_empty() {
+                            Vec::new().into()
+                        } else {
+                            voxel_marks(&self.pack, &ids, &mut table).into()
+                        };
+                        self.streaming.voxel_marks = marks;
                         log::info!(
                             "shader pack {name}: mc_Entity for {} of {} block sprites in {} ms",
                             table.chunks(3).filter(|p| p[0] != -1).count(),
@@ -350,6 +361,9 @@ impl Game<'_> {
                     }
                 }
             });
+            if self.streaming.voxel_marks != marks {
+                self.all_sections_changed();
+            }
             if let Err(panic) = loaded {
                 self.shader_pack_failed(name, dimension, &panic);
             }
@@ -716,6 +730,50 @@ pub(super) fn block_id_table(pack: &super::PackResources, ids: &BlockIds) -> Vec
         }
     }
     table
+}
+
+/// `Mesher::voxel_marks`: the block states whose id is not their sprites', that a pack voxelizing
+/// its lights would see flicker (`mesher::voxel_mark`): those that give light, or that aren't
+/// full blocks, for a pack's own light list (a flowering azalea). `table` (`terrain_table`) gets
+/// their entries after the sprite layers'. Terrain, whose full cubes give no light, needs none.
+fn voxel_marks(pack: &super::PackResources, ids: &BlockIds, table: &mut Vec<i32>) -> Vec<u16> {
+    use std::collections::HashMap;
+    let registry = pack.assets.registry;
+    let catalog = &pack.render.model_catalog;
+    let origin = horizon_core::position::BlockPos::new(0, 0, 0);
+    let mut marks = vec![0u16; registry.len()];
+    let mut entries: HashMap<(i32, u8), u16> = HashMap::new();
+    for (i, mark) in marks.iter_mut().enumerate() {
+        let state_id = horizon_world::registry::BlockStateId(i as u32);
+        let Some(state) = registry.state(state_id) else {
+            continue;
+        };
+        let Some(id) = ids.id(&state.name, |k| state.properties.get(k).map(String::as_str)) else {
+            continue;
+        };
+        let Some(facts) = pack.context.tables.facts(state_id) else {
+            continue;
+        };
+        if facts.emission == 0 && facts.solid_render {
+            continue;
+        }
+        let models = catalog.collect(state_id, origin).unwrap_or_default();
+        let shared = models.iter().flat_map(|(_, m)| &m.faces).any(|face| {
+            table.get(face.layer as usize * 3).is_some_and(|&sprite| sprite != id)
+        });
+        if !shared {
+            continue;
+        }
+        let next = (table.len() / 3).min(usize::from(u16::MAX >> 1)) as u16;
+        *mark = *entries.entry((id, facts.emission)).or_insert_with(|| {
+            table.extend([id, -1, i32::from(facts.emission)]);
+            next
+        });
+    }
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    marks
 }
 
 /// `at_midBlock.w` of each block sprite layer: the light the block drawing it gives (Iris's

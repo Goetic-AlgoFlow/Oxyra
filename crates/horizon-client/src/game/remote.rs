@@ -2176,6 +2176,7 @@ impl Game<'_> {
         self.streaming.nether_shading = self.dim == Dim::Nether;
         // The seed in SpawnInfo is already the hashed one the client's BiomeManager holds.
         self.streaming.biome_zoom = horizon_core::biome::BiomeZoom::new(spawn.seed);
+        self.note_portal_jump();
         self.player = None;
         // handleLogin / handleRespawn: LocalPlayer.setPortalCooldown, so a
         // player who arrives standing in a portal gets no overlay from it.
@@ -5541,6 +5542,7 @@ impl Game<'_> {
             (yaw, pitch),
             p,
         );
+        let (position, delta) = self.portal_landing(position).unwrap_or((position, delta));
         match self.player.as_mut() {
             Some(player) => {
                 player.position = position;

@@ -3329,6 +3329,10 @@ impl PackPost {
     }
 
     /// Whether the pack draws terrain itself.
+    /// `depthtex0` of the last run, in GL's rows and window depth.
+    pub fn depth_view(&self) -> Option<&wgpu::TextureView> {
+        self.targets.as_ref().map(|t| &t.depth)
+    }
     pub fn has_terrain(&self) -> bool {
         self.terrain.is_some()
     }

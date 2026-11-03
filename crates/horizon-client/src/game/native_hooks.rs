@@ -9687,7 +9687,8 @@ impl Game<'_> {
     /// Whether key `key` (`key.keyboard.left.shift`) is held now, as `InputConstants.isKeyDown`
     /// answers. API 85.
     pub(super) fn native_key_down(&self, key: &str) -> bool {
-        keybinds::key_code(key).is_some_and(|k| self.keys.contains(&k))
+        // The physical keys: `keys` holds only what gameplay gets, nothing behind a screen.
+        keybinds::key_code(key).is_some_and(|k| self.physical_keys.contains(&k))
     }
     /// Key `key`'s label (`InputConstants.Key.getDisplayName`: "Left Shift"), in the game's
     /// language. API 85.

@@ -82,6 +82,9 @@ pub(super) struct Portals {
     pub(super) player: PortalState,
     /// `LocalPlayer.portalProcess.isInsidePortalThisTick`.
     client_inside: bool,
+    /// Where the window's own player was last tick, and in which level: whether it went over a
+    /// portal's plane (`server_travel::window_crossed_plane`).
+    pub(super) window_at: Option<(Dim, Vec3)>,
     /// Items and mobs, by entity id.
     pub(super) entities: HashMap<u32, PortalState>,
     /// Positions before this tick's moves, by entity id.

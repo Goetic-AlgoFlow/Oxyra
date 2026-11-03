@@ -85,6 +85,7 @@ fn mesh(
         translucent_layers: &[],
         leaf_culling: mode,
         hidden_blocks: &[],
+        voxel_marks: &[],
     };
     mesher.mesh(&region, sy)
 }

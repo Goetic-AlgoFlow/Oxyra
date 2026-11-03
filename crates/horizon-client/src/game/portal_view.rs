@@ -5,6 +5,7 @@
 //! portal as `NetherPortalBlock.getExitPortal` would without building one, keeps its chunks
 //! running with portal tickets, and publishes them (`PortalSnapshot`). A server the game only
 //! joins sends nothing of another level, so there portals stay vanilla's.
+use std::collections::VecDeque;
 use super::{Dim, Game, end::END_SPAWN};
 use horizon_client::chunk::Chunk;
 use horizon_client::fast_hash::{FxHashMap, FxHashSet};
@@ -153,6 +154,26 @@ pub(super) struct PortalMeshes {
 
 /// How long the meshes a crossing took over may stand in for chunks the server does not send.
 const STAND_IN_FOR: Duration = Duration::from_secs(20);
+/// A crossing's stand-ins go up nearest first, for this long each frame.
+const STAND_IN_BUDGET: Duration = Duration::from_millis(3);
+/// The meshes of the levels behind portals go up for this long each frame.
+const FOREIGN_BUDGET: Duration = Duration::from_millis(2);
+
+/// The portal the camera is in: where a crossing takes what is at its entry.
+#[derive(Clone, Copy)]
+pub(super) struct PortalHop {
+    to_level: Dim,
+    from: glam::DVec3,
+    to: glam::DVec3,
+    turn: f64,
+}
+
+/// A crossing's landing: where the player goes on from, and when it crossed.
+pub(super) struct PortalJump {
+    position: Vec3,
+    velocity: Vec3,
+    at: Instant,
+}
 
 /// The portals within `RANGE` of `around`, nearest first: `kind` tells a portal's blocks, by
 /// whether they span the x axis (None: an End portal, flat).
@@ -235,6 +256,9 @@ fn portal_rectangles<'a>(
     found
 }
 
+/// How far inside the frame's far face the opening lies, in blocks.
+const PORTAL_OPENING_INSET: f64 = 1.0 / 128.0;
+
 /// A portal's blocks as a box (min, max) a hair larger, `shift` blocks east.
 fn portal_box(a: &FoundRectangle, x_axis: bool, shift: f64) -> [glam::DVec3; 2] {
     use glam::DVec3;
@@ -257,7 +281,15 @@ impl Game<'_> {
         };
         let region = std::mem::take(&mut self.portal_meshes.regions[i]);
         let east = region_x(LEVELS[i]);
-        renderer.remove_columns(region.meshed.keys().map(|&(x, z)| (x + east, z)));
+        let (stale, kept): (Vec<_>, _) = std::mem::take(&mut self.portal_meshed)
+            .into_iter()
+            .partition(|(tag, _, _)| usize::from(*tag) == i);
+        self.portal_meshed = VecDeque::from(kept);
+        self.streaming
+            .free(stale.into_iter().map(|(_, key, mesh)| (key, mesh)).collect());
+        horizon_client::spans::time("portal_drop", || {
+            renderer.remove_columns(region.meshed.keys().map(|&(x, z)| (x + east, z)));
+        });
         self.streaming.drop_foreign(i as u8);
         self.streaming.free(
             region
@@ -289,25 +321,55 @@ impl Game<'_> {
         {
             let bottom = self.world.bottom_y();
             let sections = self.world.layout().sections() as i32;
+            let centre = self
+                .portal_jump
+                .as_ref()
+                .map_or(self.previous_position, |j| j.position);
+            let distance = |x: i32, y: i32, z: i32| {
+                let d = |c: f64, s: i32| c - f64::from(s) * 16.0 - 8.0;
+                let (dx, dy, dz) = (d(centre.x, x), d(centre.y - f64::from(bottom), y), d(centre.z, z));
+                dx * dx + dy * dy + dz * dz
+            };
             let mut columns = FxHashSet::default();
+            let mut waiting = Vec::new();
             let mut spent = Vec::new();
             for ((x, sy, z), (min_y, mesh)) in
                 std::mem::take(&mut self.portal_meshes.regions[here].cache)
             {
                 let key = (x, sy + (min_y - bottom).div_euclid(16), z);
                 if (0..sections).contains(&key.1) && !renderer.has_section(key) {
-                    renderer.upload(key, &mesh);
                     columns.insert((x, z));
+                    waiting.push((key, (x, sy, z), mesh));
+                } else {
+                    spent.push(((x, sy, z), mesh));
                 }
-                spent.push(((x, sy, z), mesh));
             }
             self.streaming.free(spent);
+            // Farthest first: the nearest are taken off the end.
+            waiting.sort_by(|a, b| {
+                distance(b.0.0, b.0.1, b.0.2).total_cmp(&distance(a.0.0, a.0.1, a.0.2))
+            });
             log::info!(
                 "Oxyra: crossed into {:?} with {} columns already meshed",
                 self.dim,
                 columns.len()
             );
+            self.portal_stand_ins = waiting;
             self.portal_crossed = Some((Instant::now(), columns));
+        }
+        if !self.portal_stand_ins.is_empty() {
+            let started = Instant::now();
+            let mut spent = Vec::new();
+            while started.elapsed() < STAND_IN_BUDGET {
+                let Some((key, cached, mesh)) = self.portal_stand_ins.pop() else {
+                    break;
+                };
+                if !renderer.has_section(key) {
+                    renderer.upload(key, &mesh);
+                }
+                spent.push((cached, mesh));
+            }
+            self.streaming.free(spent);
         }
         // Stand-ins the server's chunks replace are left to the streaming; the others go.
         if let Some((at, columns)) = &mut self.portal_crossed {
@@ -389,8 +451,8 @@ impl Game<'_> {
                 }
             }
         }
-        let done = self.streaming.take_foreign();
-        if done.is_empty() {
+        self.portal_meshed.extend(self.streaming.take_foreign());
+        if self.portal_meshed.is_empty() {
             return;
         }
         let Some(renderer) = self.renderer.as_mut() else {
@@ -398,7 +460,11 @@ impl Game<'_> {
         };
         let sections = self.world.layout().sections() as i32;
         let mut spent = Vec::new();
-        for (tag, (x, sy, z), mesh) in done {
+        let started = Instant::now();
+        while started.elapsed() < FOREIGN_BUDGET {
+            let Some((tag, (x, sy, z), mesh)) = self.portal_meshed.pop_front() else {
+                break;
+            };
             let dim = LEVELS[tag as usize];
             let Some(bottom) = views.iter().find(|v| v.request.to == dim).map(|v| v.bottom_y) else {
                 spent.push(((x, sy, z), mesh));
@@ -728,6 +794,7 @@ impl Game<'_> {
             .integrated
             .as_ref()
             .map_or_else(Vec::new, |s| s.portal_views());
+        self.portal_hop.set(None);
         let mut frames: Vec<horizon_client::gfx::PortalView> = Vec::new();
         let mut frame_of = vec![None; self.portal_entries.len()];
         let mut plain = Vec::new();
@@ -789,6 +856,69 @@ impl Game<'_> {
         (frames, plain)
     }
 
+    /// Whether the camera is on the low side of the portal with corner `corner`, `depth` blocks
+    /// into its thickness: inside it, the side it came in from, until it crosses (the server's
+    /// answer comes a few ticks after its middle plane).
+    fn portal_side(&self, corner: BlockPos, depth: f64) -> bool {
+        let low = depth < 0.5;
+        if !(0.0..=1.0).contains(&depth) {
+            if self.portal_side.get().is_some_and(|(c, _)| c == corner) {
+                self.portal_side.set(None);
+            }
+            return low;
+        }
+        match self.portal_side.get() {
+            Some((c, side)) if c == corner => side,
+            _ => {
+                self.portal_side.set(Some((corner, low)));
+                low
+            }
+        }
+    }
+
+    /// The new level's first frame of a crossing: where the camera's portal takes the player,
+    /// as its view showed it (`remote_teleport`).
+    pub(super) fn note_portal_jump(&mut self) {
+        self.portal_jump = self
+            .portal_hop
+            .get()
+            .filter(|h| h.to_level == self.dim)
+            .zip(self.player.as_ref())
+            .map(|(h, p)| {
+                let turned = glam::DMat3::from_rotation_y(h.turn);
+                let at = glam::DVec3::new(p.position.x, p.position.y, p.position.z);
+                let v = glam::DVec3::new(p.velocity.x, p.velocity.y, p.velocity.z);
+                let (at, v) = (h.to + turned * (at - h.from), turned * v);
+                PortalJump {
+                    position: Vec3::new(at.x, at.y, at.z),
+                    velocity: Vec3::new(v.x, v.y, v.z),
+                    at: Instant::now(),
+                }
+            });
+    }
+
+    /// Where a teleport the server sent to `position` lands the player instead, and its velocity:
+    /// the landing of the crossing it answers, when it is that one.
+    pub(super) fn portal_landing(&mut self, position: Vec3) -> Option<(Vec3, Vec3)> {
+        let jump = self.portal_jump.as_ref()?;
+        let near = |a: f64, b: f64| (a - b).abs() < 3.0;
+        if jump.at.elapsed() > Duration::from_secs(3) {
+            self.portal_jump = None;
+            return None;
+        }
+        if !(near(jump.position.x, position.x)
+            && near(jump.position.y, position.y)
+            && near(jump.position.z, position.z))
+        {
+            return None;
+        }
+        log::info!(
+            "Oxyra: landed {} ms after the crossing's respawn",
+            jump.at.elapsed().as_millis()
+        );
+        self.portal_jump.take().map(|j| (j.position, j.velocity))
+    }
+
     /// What `camera` sees through the portal `entry`, in the level `view` holds: the camera
     /// carried from the entry to the exit (turned a quarter when their axes differ, as the
     /// crossing turns the player), the exit's plane, and the entry's opening `east` blocks east,
@@ -816,6 +946,8 @@ impl Game<'_> {
         let (w, h) = (f64::from(area.axis1_size), f64::from(area.axis2_size));
         // Each portal's plane: the points the entry's and the exit's match at, the turn between
         // them, their axes across, and the entry's opening on its plane.
+        // A Nether portal: the way the camera goes through it, from the side it came from.
+        let mut heading = None;
         let (from, to, turn, exit_axis, opening) = match entry.x_axis {
             // A Nether portal: its blocks' middle plane, where their faces give way, to the
             // exit's, turned a quarter when their axes differ as the crossing turns the player.
@@ -836,7 +968,19 @@ impl Game<'_> {
                     (DVec3::Z, DVec3::X)
                 };
                 // The far face of the frame: all of the frame is this level's, whatever the side.
-                let far = if across.dot(camera - base) < 0.5 { 1.0 } else { 0.0 };
+                // A hair inside it: a block against the frame has its face on that plane.
+                let depth = across.dot(camera - base);
+                let low_side = if parent.is_none() {
+                    self.portal_side(m, depth)
+                } else {
+                    depth < 0.5
+                };
+                heading = Some(if low_side { across } else { -across });
+                let far = if low_side {
+                    1.0 - PORTAL_OPENING_INSET
+                } else {
+                    PORTAL_OPENING_INSET
+                };
                 let corner = |a: f64, y: f64| base + far * across + a * along + y * DVec3::Y;
                 (
                     middle(area, x_axis),
@@ -911,14 +1055,36 @@ impl Game<'_> {
                 "minecraft:visual/fog_color",
             )),
         );
-        let offset = glam::DMat3::from_rotation_y(turn) * (camera - from);
+        let turned = glam::DMat3::from_rotation_y(turn);
+        let offset = turned * (camera - from);
+        if parent.is_none()
+            && entry.x_axis.is_some()
+            && let Some(exit) = view.exit
+            && (exit.axis1_size, exit.axis2_size) == (area.axis1_size, area.axis2_size)
+        {
+            let inside = |v: f64, size: f64| (-0.5..=size + 0.5).contains(&v);
+            let (along, across) = if entry.x_axis == Some(true) {
+                (camera.x - base.x, camera.z - base.z)
+            } else {
+                (camera.z - base.z, camera.x - base.x)
+            };
+            if inside(along, w) && (-0.5..=1.5).contains(&across) {
+                self.portal_hop.set(Some(PortalHop {
+                    to_level: view.request.to,
+                    from,
+                    to,
+                    turn,
+                }));
+            }
+        }
         let beyond = f64::from(region_x(view.request.to)) * 16.0;
         let carried = to + offset + DVec3::new(beyond, 0.0, 0.0);
         // The exit's plane, its normal away from the carried camera: what lies before it is cut.
-        let normal = if exit_axis.dot(offset) > 0.0 {
-            -exit_axis
-        } else {
-            exit_axis
+        let normal = match heading {
+            Some(heading) if exit_axis.dot(turned * heading) > 0.0 => exit_axis,
+            Some(_) => -exit_axis,
+            None if exit_axis.dot(offset) > 0.0 => -exit_axis,
+            None => exit_axis,
         };
         Some(horizon_client::gfx::PortalView {
             parent,

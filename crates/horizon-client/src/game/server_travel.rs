@@ -152,6 +152,9 @@ impl Trip {
     }
 }
 
+/// Ticks the window's player stands in a portal it sees through before it takes it uncrossed.
+const WINDOW_STANDING_DELAY: i32 = 80;
+
 impl Game<'_> {
     pub(super) fn gateway_source_chunks(&self) -> Vec<(i32, i32)> {
         self.server_trips
@@ -234,6 +237,15 @@ impl Game<'_> {
             g.sleeping,
             g.vehicle.is_some(),
         );
+        // The window's own player, with portals it sees through: the crossing is its middle going
+        // over the plane, where the picture is the same on both sides, each way and at once.
+        let window = host.owner.as_ref().is_some_and(|o| {
+            host.hub.guest(conn).is_some_and(|g| g.uuid == o.uuid)
+        }) && self.portal_view_requests().iter().any(|r| r.crossing);
+        let crossed = window && self.window_crossed_plane(at);
+        if crossed {
+            self.portals.player.cooldown = 0;
+        }
         // Entity.checkInsideBlocks: the Nether portal blocks the box is in.
         // `canUsePortal(false)` is false for a passenger: its vehicle goes
         // through and carries it (`carry_riders_through_portals`).
@@ -333,14 +345,11 @@ impl Game<'_> {
         } else {
             "players_nether_portal_default_delay"
         };
-        // The window's own player, crossing a portal it sees through: at once.
-        let at_once = host.owner.as_ref().is_some_and(|o| {
-            host.hub.guest(conn).is_some_and(|g| g.uuid == o.uuid)
-        }) && self.portal_view_requests().iter().any(|r| r.crossing);
-        let transition = if at_once {
-            0
-        } else {
-            self.ui.rules.int(rule).max(0)
+        // Standing in the portal without crossing its plane (arrived there) still takes it, late.
+        let transition = match (crossed, window) {
+            (true, _) => 0,
+            (false, true) => WINDOW_STANDING_DELAY,
+            (false, false) => self.ui.rules.int(rule).max(0),
         };
         let Some(entry) = self
             .portals
@@ -349,7 +358,7 @@ impl Game<'_> {
         else {
             return;
         };
-        let plan = self.portal_plan(entry, at, WIDTH as f32, HEIGHT as f32, true);
+        let plan = self.portal_plan(entry, at, WIDTH as f32, HEIGHT as f32, !crossed);
         if !self.may_enter(plan.dim) {
             return;
         }
@@ -401,6 +410,28 @@ impl Game<'_> {
     }
 
     /// A Nether portal block a player's box is in.
+    /// Whether the window's player, at `at`, went over the middle plane of the Nether portal it
+    /// is in since last tick.
+    fn window_crossed_plane(&mut self, at: Vec3) -> bool {
+        let last = self.portals.window_at.replace((self.dim, at));
+        let Some((level, last)) = last.filter(|(level, _)| *level == self.dim) else {
+            return false;
+        };
+        let _ = level;
+        let Some(pos) = self.nether_portal_inside(at) else {
+            return false;
+        };
+        let state = self.world.block(pos.x, pos.y, pos.z);
+        let Some(x_axis) = self.res.behaviours().portal_axis(state) else {
+            return false;
+        };
+        let (before, now, plane) = if x_axis {
+            (last.z, at.z, f64::from(pos.z) + 0.5)
+        } else {
+            (last.x, at.x, f64::from(pos.x) + 0.5)
+        };
+        before != now && (before - plane) * (now - plane) <= 0.0
+    }
     fn nether_portal_inside(&self, at: Vec3) -> Option<BlockPos> {
         let w = WIDTH / 2.0 - 1.0e-5;
         let lo = [at.x - w, at.y + 1.0e-5, at.z - w];

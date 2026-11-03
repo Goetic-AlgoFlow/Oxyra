@@ -145,6 +145,7 @@ fn a_shader_pack_lights_the_faces_itself() {
             translucent_layers: &[],
             leaf_culling: LeafCullingMode::Off,
             hidden_blocks: &[],
+            voxel_marks: &[],
         };
         let mut colours: Vec<u32> = mesher
             .mesh(&region, 0)
@@ -198,6 +199,7 @@ fn separate_ao_passes_ao_in_alpha_without_darkening_rgb() {
         translucent_layers: &[],
         leaf_culling: LeafCullingMode::Off,
             hidden_blocks: &[],
+            voxel_marks: &[],
     };
     let mesh = mesher.mesh(&region, 0);
     assert!(!mesh.solid.is_empty());
@@ -273,6 +275,7 @@ fn reused_mesh_matches_fresh_geometry_across_sections_and_resource_reload() {
             translucent_layers: &[],
             leaf_culling: LeafCullingMode::Off,
             hidden_blocks: &[],
+            voxel_marks: &[],
         };
         for (case, (center, east)) in [
             (&empty, None),

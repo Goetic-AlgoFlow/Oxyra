@@ -856,26 +856,20 @@ fn load_shadow(
                 })
             })
         };
-    // `shadowTerrain`, `shadowTranslucent`, `shadowEntities` and `shadowBlockEntities` (3.2)
-    // leave their part out of the shadow pass; all are on by default (OQ-19). `shadowPlayer`
-    // and `shadowLightBlockEntities` (E, off by default) keep the player, and block entities
-    // that emit light, when the first two are off.
+    // `shadowTerrain` and `shadowTranslucent` (3.2) leave their part out of the shadow pass; both
+    // are on by default (OQ-19). Oxyra's choice: entities and block entities always cast, whatever
+    // `shadowEntities`, `shadowBlockEntities`, `shadowPlayer` and `shadowLightBlockEntities` say;
+    // packs turn them off to save time, and the round blob no longer stands in (`pack_shadows`).
     let keep = |key: &str| properties.get(key).is_none_or(|v| v.trim() != "false");
-    let set = |key: &str| properties.get(key).is_some_and(|v| v.trim() == "true");
-    let only_player = !keep("shadowEntities") && set("shadowPlayer");
-    let only_lit = !keep("shadowBlockEntities") && set("shadowLightBlockEntities");
+    let (only_player, only_lit) = (false, false);
     let shadow = keep("shadowTerrain")
         .then(|| load(&["shadow"], terrain, true, true))
         .flatten();
     let water = keep("shadowTranslucent")
         .then(|| load(&["shadow_water", "shadow"], terrain, true, false))
         .flatten();
-    let shadow_entities = (keep("shadowEntities") || only_player)
-        .then(|| load(&["shadow_entities", "shadow"], entities, false, true))
-        .flatten();
-    let shadow_block = (keep("shadowBlockEntities") || only_lit)
-        .then(|| load(&["shadow_block", "shadow"], entities, false, true))
-        .flatten();
+    let shadow_entities = load(&["shadow_entities", "shadow"], entities, false, true);
+    let shadow_block = load(&["shadow_block", "shadow"], entities, false, true);
     if shadow.is_none() && terrain.is_some() {
         loader
             .post
@@ -1618,15 +1612,16 @@ mod tests {
             (Some("shadow".into()), Some("shadow_block".into()))
         );
         let off = load("shadowEntities=false\nshadowBlockEntities = false");
+        // Oxyra's choice: they cast all the same.
         assert!(
-            off.shadow.is_some() && off.shadow_entities.is_none() && off.shadow_block.is_none()
+            off.shadow.is_some() && off.shadow_entities.is_some() && off.shadow_block.is_some()
         );
-        // shadowPlayer and shadowLightBlockEntities keep a part of each.
+        assert!(!off.shadow_only_player && !off.shadow_only_lit_blocks);
         let some = load(
             "shadowEntities=false\nshadowPlayer=true\nshadowBlockEntities=false\nshadowLightBlockEntities=true",
         );
-        assert!(some.shadow_entities.is_some() && some.shadow_only_player);
-        assert!(some.shadow_block.is_some() && some.shadow_only_lit_blocks);
+        assert!(some.shadow_entities.is_some() && !some.shadow_only_player);
+        assert!(some.shadow_block.is_some() && !some.shadow_only_lit_blocks);
         assert!(!post.shadow_only_player && !post.shadow_only_lit_blocks);
         let comp: Vec<_> = post
             .shadow_comp

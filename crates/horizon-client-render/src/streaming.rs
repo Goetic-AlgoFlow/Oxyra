@@ -270,6 +270,7 @@ struct MeshSettings {
     translucent_layers: Arc<[bool]>,
     leaf_culling: LeafCullingMode,
     hidden_blocks: Arc<[u32]>,
+    voxel_marks: Arc<[u16]>,
 }
 enum Job {
     Generate(i32, i32),
@@ -530,6 +531,8 @@ pub struct Streaming {
     pub leaf_culling: LeafCullingMode,
     /// Block states the mesher leaves out (`Mesher::hidden_blocks`).
     pub hidden_blocks: Arc<[u32]>,
+    /// `Mesher::voxel_marks`.
+    pub voxel_marks: Arc<[u16]>,
     /// Incremental relighting of block edits on lit chunks (see `light::relight`).
     light_tables: Arc<LightTables>,
     /// Applied edits by sequence, replayed onto light jobs snapshotted before them.
@@ -949,6 +952,7 @@ impl<G: ChunkGenerator> Jobs<G> {
                     translucent_layers: &settings.translucent_layers,
                     leaf_culling: settings.leaf_culling,
                     hidden_blocks: &settings.hidden_blocks,
+                    voxel_marks: &settings.voxel_marks,
                     assets: &context.assets,
                     render: &context.render,
                     tables: &context.tables,
@@ -1064,6 +1068,7 @@ impl Streaming {
             translucent_layers: Arc::from([]),
             leaf_culling: LeafCullingMode::Off,
             hidden_blocks: Arc::from(Vec::new()),
+            voxel_marks: Arc::from(Vec::new()),
             light_tables,
             light_log: Vec::new(),
             light_edit_sequence: 0,
@@ -1556,6 +1561,7 @@ impl Streaming {
                         translucent_layers: self.translucent_layers.clone(),
                         leaf_culling: self.leaf_culling,
                         hidden_blocks: self.hidden_blocks.clone(),
+                        voxel_marks: self.voxel_marks.clone(),
                         separate_ao: self.separate_ao,
                     },
                 ),
@@ -2127,6 +2133,7 @@ impl Streaming {
                             translucent_layers: self.translucent_layers.clone(),
                             leaf_culling: self.leaf_culling,
                             hidden_blocks: self.hidden_blocks.clone(),
+                            voxel_marks: self.voxel_marks.clone(),
                         },
                     ),
                 );
