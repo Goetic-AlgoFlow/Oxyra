@@ -672,15 +672,19 @@ pub(super) fn block_id_table(pack: &super::PackResources, ids: &BlockIds) -> Vec
     let sprite = |name: &str| pack.render.sprite_layers.get(name).copied();
     // (layer, id) -> (a block named like the sprite, the blocks).
     let mut votes: BTreeMap<(u32, i32), (bool, BTreeSet<&str>)> = BTreeMap::new();
+    // Blocks with a state the pack gives no id: their own sprite keeps -1, as with Iris (dirt,
+    // which Solas leaves out, would otherwise take farmland's id and its wet shine).
+    let mut unlisted: BTreeSet<&str> = BTreeSet::new();
     for i in 0..registry.len() {
         let state_id = horizon_world::registry::BlockStateId(i as u32);
         let Some(state) = registry.state(state_id) else {
             continue;
         };
+        let block = state.name.strip_prefix("minecraft:").unwrap_or(&state.name);
         let Some(id) = ids.id(&state.name, |k| state.properties.get(k).map(String::as_str)) else {
+            unlisted.insert(block);
             continue;
         };
-        let block = state.name.strip_prefix("minecraft:").unwrap_or(&state.name);
         let mut vote = |layer: u32| {
             let named = pack
                 .layer_names
@@ -709,17 +713,19 @@ pub(super) fn block_id_table(pack: &super::PackResources, ids: &BlockIds) -> Vec
             }
         }
     }
-    let mut best: BTreeMap<u32, (bool, usize, i32)> = BTreeMap::new();
-    for ((layer, id), (named, blocks)) in votes {
-        let candidate = (named, blocks.len(), -id);
-        let b = best.entry(layer).or_insert(candidate);
-        if candidate > *b {
-            *b = candidate;
-        }
-    }
-    for (layer, (_, _, id)) in best {
+    let counts = votes
+        .into_iter()
+        .map(|(key, (named, blocks))| (key, (named, blocks.len())))
+        .collect();
+    let left_out = |layer: u32| {
+        pack.layer_names
+            .get(&layer)
+            .and_then(|n| n.strip_prefix("block/"))
+            .is_some_and(|b| unlisted.contains(b))
+    };
+    for (layer, id) in layer_ids(&counts, left_out) {
         if let Some(slot) = table.get_mut(layer as usize * 2) {
-            *slot = -id;
+            *slot = id;
         }
     }
     for f in ["water_still", "water_flow", "lava_still", "lava_flow"] {
@@ -730,6 +736,28 @@ pub(super) fn block_id_table(pack: &super::PackResources, ids: &BlockIds) -> Vec
         }
     }
     table
+}
+
+/// Each voted layer's `mc_Entity` id from `votes`, (layer, id) -> (a block named like the sprite
+/// draws it, how many blocks do): the named block's, else the most blocks', ties the lowest.
+/// A layer whose own block the pack leaves out (`left_out`) and no named block votes for gets
+/// none: it stays -1.
+fn layer_ids(
+    votes: &std::collections::BTreeMap<(u32, i32), (bool, usize)>,
+    left_out: impl Fn(u32) -> bool,
+) -> Vec<(u32, i32)> {
+    let mut best: std::collections::BTreeMap<u32, (bool, usize, i32)> = Default::default();
+    for (&(layer, id), &(named, blocks)) in votes {
+        let candidate = (named, blocks, -id);
+        let b = best.entry(layer).or_insert(candidate);
+        if candidate > *b {
+            *b = candidate;
+        }
+    }
+    best.into_iter()
+        .filter(|&(layer, (named, _, _))| named || !left_out(layer))
+        .map(|(layer, (_, _, id))| (layer, -id))
+        .collect()
 }
 
 /// `Mesher::voxel_marks`: the block states whose id is not their sprites', that a pack voxelizing
@@ -869,7 +897,27 @@ fn terrain_table(ids: &[i32], emission: &[i32]) -> Vec<i32> {
 
 #[cfg(test)]
 mod emission_tests {
-    use super::{layer_lights, terrain_table};
+    use super::{layer_ids, layer_lights, terrain_table};
+
+    /// A sprite's id: its own block's (grass over farmland on 0); a shared one takes what most
+    /// blocks drawing it have (1); but dirt's sprite, dirt being left out of the pack, keeps none
+    /// though farmland's sides draw it (Solas: farmland is "wet farmland", a shiny material).
+    #[test]
+    fn a_sprite_takes_the_id_of_its_block_and_none_if_its_block_has_none() {
+        let votes = std::collections::BTreeMap::from([
+            ((0, 30000), (true, 1)),
+            ((0, 20310), (false, 1)),
+            ((1, 7), (false, 3)),
+            ((1, 5), (false, 2)),
+            ((2, 20310), (false, 1)),
+            ((2, 30000), (false, 1)),
+        ]);
+        assert_eq!(
+            layer_ids(&votes, |layer| layer == 2 || layer == 0),
+            [(0, 30000), (1, 7)]
+        );
+        assert_eq!(layer_ids(&votes, |_| false)[2], (2, 20310));
+    }
 
     /// A sprite's light: the block named like it gives its own (a torch, 14, over a wall
     /// torch's); a shared one takes what most states drawing it give (a furnace's side: as
