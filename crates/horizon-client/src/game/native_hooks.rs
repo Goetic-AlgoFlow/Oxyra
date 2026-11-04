@@ -9786,7 +9786,9 @@ impl Game<'_> {
     /// each message of the event loop before winit does (the `MSG` it points to) and returns
     /// true to keep it from winit, as with winit's `with_msg_hook`; it stays until the next ask.
     /// `motion` is raw mouse motion the mod gathered since the last ask (counts, x right and y
-    /// down), applied as winit's `DeviceEvent::MouseMotion` is. API 368.
+    /// down), applied as winit's `DeviceEvent::MouseMotion` is. The game crate forbids unsafe
+    /// code: `horizon_threads::raw_mouse::read_batch` reads a WM_INPUT and the raw reports
+    /// queued behind it for the filter. API 368.
     pub(super) fn native_raw_input(
         &self,
         filter: &mut Option<fn(*const std::ffi::c_void) -> bool>,

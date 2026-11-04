@@ -7,6 +7,8 @@ pub mod boot_paint;
 pub mod heap_census;
 pub mod jobs;
 pub mod memory_limit;
+#[cfg(all(windows, target_pointer_width = "64"))]
+pub mod raw_mouse;
 
 use std::sync::{
     OnceLock,
