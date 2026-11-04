@@ -5026,6 +5026,85 @@ impl Renderer {
     /// The portal views in their openings, over a shader pack's finished image, behind what
     /// stands before them in the depth it left. Skipped where the image and the depth differ in
     /// size (a pack rendering at another scale).
+    /// Additive light (`Frame::additive`) over a shader pack's output: the pack's depth
+    /// copied into `depth` first, so blocks in front still hide it.
+    fn additive_over_pack(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Frame,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        pack_depth: Option<&wgpu::TextureView>,
+        (quads, first_quad): (u32, u32),
+    ) {
+        if let Some(pack_depth) = pack_depth {
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Additive pack depth"),
+                layout: &self.portal_pack_depth.get_bind_group_layout(0),
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(pack_depth),
+                }],
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Additive pack depth"),
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.portal_pack_depth);
+            pass.set_bind_group(0, &group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Additive over the pack"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_bind_group(0, &self.entity_group, &[]);
+        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+        pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+        let mut first = 0;
+        // As the world pass draws them.
+        let _ = quads;
+        for run in frame.additive.as_chunks::<4>().0.chunk_by(|a, b| {
+            (a[0].layer & 0xffff == DRAGON_RAYS_OVERLAY)
+                == (b[0].layer & 0xffff == DRAGON_RAYS_OVERLAY)
+        }) {
+            let rays = run[0][0].layer & 0xffff == DRAGON_RAYS_OVERLAY;
+            pass.set_pipeline(if rays {
+                &self.dragon_rays_pipeline
+            } else {
+                &self.additive_pipeline
+            });
+            let end = first + run.len() as u32;
+            pass.draw_indexed(first * 6..end * 6, (first_quad * 4) as i32, 0..1);
+            first = end;
+        }
+    }
+
     fn portal_openings_over(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -8225,6 +8304,14 @@ impl Renderer {
         }
         // The world's targets: the screen, or the scaled target of `post`.
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
+        // Under a shader pack, additive light (dragon rays, mods' effects) drawn in the world
+        // pass is painted over by the pack's deferred and composite programs (its sky, its
+        // lit ground): it is drawn over the pack's output instead, tested against its depth.
+        let additive_over_pack = pack_post
+            && self
+                .world_post
+                .size()
+                .is_none_or(|s| s == [self.config.width, self.config.height]);
         // One of Horizon's own packs reads the same world target.
         let native_post = !frame.title && self.native.as_ref().is_some_and(|n| n.post.is_some());
         if let Some(timer) = Self::pass_timer(&mut self.pack_post, &mut self.native)
@@ -9403,7 +9490,7 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if additive_quads > 0 && !oit_on {
+            if additive_quads > 0 && !oit_on && !additive_over_pack {
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 let mut first = 0;
@@ -9926,6 +10013,16 @@ impl Renderer {
             post.flush_uniforms(&self.queue);
             let pack_depth = post.depth_view().cloned();
             self.pack_post = Some((dimension, Some(post)));
+            if additive_over_pack && additive_quads > 0 && !oit_on {
+                self.additive_over_pack(
+                    &mut encoder,
+                    frame,
+                    &view_target,
+                    depth,
+                    pack_depth.as_ref(),
+                    (additive_quads, world_quads),
+                );
+            }
             self.portal_openings_over(
                 &mut encoder,
                 frame,
