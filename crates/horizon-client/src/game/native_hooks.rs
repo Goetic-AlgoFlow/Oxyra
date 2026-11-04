@@ -7,7 +7,10 @@
 //! WebAssembly mod of the same id kept them.
 //!
 //! API 370 lets a mod's world text glow (`NativeWorldText::glow`): it lights a bloom
-//! layer, blurred and added to the frame, instead of being drawn sharp.
+//! layer, blurred and added to the frame, instead of being drawn sharp. A mod's settings page
+//! gets areas the mod draws itself (`\u{4}height` labels: `native_settings_canvas`, clicks in
+//! `native_settings_canvas_click`) and tooltips (`label\u{3}tooltip`); `native_hud_world_text`
+//! draws world text flat on the HUD, for previews.
 //!
 //! API 369 lets a mod pick the font of its world text (`NativeWorldText::font`) and measure
 //! text in it (`native_text_width_in`).
@@ -9751,6 +9754,26 @@ impl Game<'_> {
     pub(super) fn native_settings_text(&mut self, mod_id: &str, button: usize, text: &str) {
         let _ = (mod_id, button, text);
     }
+    /// Draw area `button` of mod `mod_id`'s settings page (a label `\u{4}height`: a row of
+    /// that many GUI pixels, 310 wide) into `batch`: `rect` is its x, y, width and height,
+    /// `cursor` the mouse in GUI pixels. Asked each frame the page shows with all of the area
+    /// in view. Any label may end in `\u{3}tooltip`, shown while hovered. API 370.
+    pub(super) fn native_settings_canvas(
+        &mut self,
+        mod_id: &str,
+        button: usize,
+        batch: &mut HudBatch,
+        rect: [f32; 4],
+        cursor: [f32; 2],
+    ) {
+        let _ = (mod_id, button, batch, rect, cursor);
+    }
+    /// Area `button` of mod `mod_id`'s settings page was clicked, or dragged over with the
+    /// button held, at `at` (GUI pixels from its top left); the page's labels are asked again
+    /// after. API 370.
+    pub(super) fn native_settings_canvas_click(&mut self, mod_id: &str, button: usize, at: [f32; 2]) {
+        let _ = (mod_id, button, at);
+    }
     /// Items to show in `stack`'s tooltip (a shulker box's contents...): set `items` when it is
     /// none yet. `lockable` when the tooltip is a slot's, in a screen with slots. Asked each frame
     /// the tooltip shows, while its lines are built and again to draw it; items with slots stand
@@ -9911,6 +9934,55 @@ impl Game<'_> {
         };
         self.native_settings_text(&id, button, text);
         self.native_settings_refresh(i);
+    }
+    /// Area `button` of native mod `i`'s page clicked at `at`, and the page's labels after it.
+    pub(super) fn native_settings_canvas_event(&mut self, i: usize, button: usize, at: [f32; 2]) {
+        let Some(id) = self.settings.mods.installed.get(i).map(|m| m.id.clone()) else {
+            return;
+        };
+        self.native_settings_canvas_click(&id, button, at);
+        self.native_settings_refresh(i);
+    }
+    /// Native mod `i`'s area `button` drawn at `rect` (`native_settings_canvas`).
+    pub(super) fn native_settings_canvas_draw(&mut self, i: usize, button: usize, batch: &mut HudBatch, rect: [f32; 4]) {
+        let Some(id) = self.settings.mods.installed.get(i).map(|m| m.id.clone()) else {
+            return;
+        };
+        let cursor = [self.cursor.0, self.cursor.1];
+        self.native_settings_canvas(&id, button, batch, rect, cursor);
+    }
+    /// World text drawn flat on the HUD: its pose's x and y (font pixels, as
+    /// `native_world_text` takes them) times `scale`, from `origin` (GUI pixels). Glowing text
+    /// is drawn as a faint halo of copies around. For previews on a settings page. API 370.
+    pub(super) fn native_hud_world_text(&self, batch: &mut HudBatch, t: &NativeWorldText, origin: [f32; 2], scale: f32) {
+        if !t.pose.is_finite() || t.text.is_empty() {
+            return;
+        }
+        let [a, r, g, b] = t.color.to_be_bytes();
+        let mut glyphs = HudBatch::new([1, 1]);
+        let style = horizon_client::text::Style { font: t.font.clone(), ..Default::default() };
+        let text = horizon_client::text::Text::styled(t.text.as_str(), style);
+        let rings: &[[f32; 2]] = if t.glow {
+            &[[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0], [0.7, 0.7], [-0.7, 0.7], [0.7, -0.7], [-0.7, -0.7]]
+        } else {
+            &[[0.0, 0.0]]
+        };
+        let alpha = if t.glow { a / 4 } else { a };
+        glyphs.text_styled(&self.gui.atlas, &text, 0.0, 0.0, horizon_client::hud::rgba(r, g, b, alpha), t.shadow && !t.glow);
+        for [ox, oy] in rings {
+            for quad in glyphs.vertices.as_chunks::<6>().0 {
+                let mut p = [[0.0; 2]; 4];
+                let mut uv = [[0.0; 2]; 4];
+                for (k, i) in horizon_client::text_display::CORNERS.into_iter().enumerate() {
+                    let v = quad[i];
+                    let at = t.pose.transform_point3(glam::Vec3::new(v.pos[0], v.pos[1], 0.0));
+                    p[k] = [origin[0] + (at.x + ox) * scale, origin[1] + (at.y + oy) * scale];
+                    uv[k] = v.uv;
+                }
+                batch.quad(p, uv, quad[0].color);
+            }
+        }
+        batch.patches.extend(glyphs.patches);
     }
 }
 

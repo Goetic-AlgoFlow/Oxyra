@@ -1440,6 +1440,9 @@ pub enum Event {
     /// Text field `.1` of native mod `.0`'s page was confirmed with `.2`: the
     /// game tells the mod and refreshes the page.
     NativeText(usize, usize, String),
+    /// Native mod `.0`'s area `.1` was clicked (or dragged over) at `.2` (x, y from its
+    /// top left, GUI pixels): the game tells the mod and refreshes the page.
+    NativeCanvas(usize, usize, [f32; 2]),
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,
     /// Copy how an agent connects (the AI Agent page).
@@ -1491,6 +1494,9 @@ pub struct OptionsUi {
     selected_native_key: Option<(usize, usize)>,
     /// A native mod's text field being typed in: (mod, button, text so far).
     native_text: Option<(usize, usize, String)>,
+    /// The areas of a native mod's page its mod draws, as laid out last: (mod, button,
+    /// [x, y, width, height] in GUI pixels), only those wholly in the list's view.
+    canvases: Vec<(usize, usize, [f32; 4])>,
     /// Controller Binds: the action waiting for a pad button.
     pub selected_pad_action: Option<&'static str>,
     /// The glyphs the binds list shows (the setting, else the pad's family).
@@ -1573,6 +1579,7 @@ impl Default for OptionsUi {
             selected_key: None,
             selected_native_key: None,
             native_text: None,
+            canvases: Vec::new(),
             selected_pad_action: None,
             pad_style: GlyphStyle::Xbox,
             languages: Vec::new(),
@@ -1813,6 +1820,12 @@ enum Row {
     /// A line of grey text (a path).
     Note(String),
     Buttons(Widget, Option<Widget>),
+    /// An area of native mod `.0`'s page that button `.1` draws itself, `.2` pixels high.
+    Canvas(usize, usize, f32),
+}
+/// A native page's label without its tooltip (`label\u{3}tooltip`).
+fn native_label(label: &str) -> &str {
+    label.split_once('\u{3}').map_or(label, |(l, _)| l)
 }
 /// A widget's tooltip (`setTooltip`), unwrapped: drawn while hovered, and
 /// its narration's hint.
@@ -1864,6 +1877,17 @@ fn tooltip_text(s: &Settings, wd: &Widget) -> Option<Text> {
     }
     if let Act::Cycle(Opt::GraphicsBackend) = act {
         tip = Some(graphics_api_tooltip(s));
+    }
+    if let Act::NativeButton(i, b) | Act::NativeField(i, b) = act
+        && let Some((_, tip)) = s
+            .mods
+            .installed
+            .get(*i)
+            .and_then(|m| m.native.as_ref())
+            .and_then(|page| page.buttons.get(*b))
+            .and_then(|label| label.split_once('\u{3}'))
+    {
+        return Some(Text::literal(tip));
     }
     match act {
         Act::Cycle(opt) if !opt.available() => Some(tr("horizon.options.unavailable")),
@@ -2299,6 +2323,12 @@ impl OptionsUi {
 
     /// A native mod's page: its name, its keys as Key Binds rows (the
     /// player's choice, else the default), then its buttons.
+    /// The areas of a native mod's page its mod draws this frame (mod, button, [x, y, width,
+    /// height]), as the last layout placed them.
+    pub fn native_canvases(&self) -> &[(usize, usize, [f32; 4])] {
+        if matches!(self.page(), Page::NativeMod(_)) { &self.canvases } else { &[] }
+    }
+
     fn native_rows(&self, s: &Settings, i: usize) -> Vec<Row> {
         let Some(m) = s.mods.installed.get(i) else {
             return Vec::new();
@@ -2322,6 +2352,13 @@ impl OptionsUi {
             rows.push(Row::Buttons(inactive(caption), Some(change)));
         }
         for (b, label) in page.buttons.iter().enumerate() {
+            let label = &native_label(label).to_owned();
+            // An area the mod draws (`\u{4}height`).
+            if let Some(height) = label.strip_prefix('\u{4}') {
+                let height = height.trim().parse::<f32>().unwrap_or(40.0).clamp(8.0, 400.0);
+                rows.push(Row::Canvas(i, b, height));
+                continue;
+            }
             // A heading (`\u{2}text`), a text field (`caption\u{1}value`), else a button.
             if let Some(heading) = label.strip_prefix('\u{2}') {
                 rows.push(Row::Note(heading.to_owned()));
@@ -2377,7 +2414,7 @@ impl OptionsUi {
             .get(i)
             .and_then(|m| m.native.as_ref())
             .and_then(|page| page.buttons.get(b))
-            .and_then(|label| label.split_once('\u{1}'))
+            .and_then(|label| native_label(label).split_once('\u{1}'))
             .map_or_else(String::new, |(_, value)| value.to_owned())
     }
 
@@ -3220,6 +3257,7 @@ impl OptionsUi {
                     row: 0,
                 });
                 let list_start = out.len();
+                self.canvases.clear();
                 let mut y = top + 2.0 - self.scroll;
                 for row in self.list_rows(s) {
                     rows.begin(&out, y);
@@ -3287,6 +3325,14 @@ impl OptionsUi {
                                 out.push(b);
                             }
                             y += 25.0;
+                        }
+                        Row::Canvas(i, b, height) => {
+                            let rect = [cx - 155.0, y + 2.0, 310.0, height];
+                            // Only while all of it shows: the mod draws it over the list.
+                            if rect[1] >= top && rect[1] + height <= bottom {
+                                self.canvases.push((i, b, rect));
+                            }
+                            y += height + 4.0;
                         }
                     }
                     rows.end(&mut out, y);
@@ -3913,6 +3959,18 @@ impl OptionsUi {
         self.size = size;
         self.framebuffer = framebuffer;
         let mut events = Vec::new();
+        if !right
+            && let Some(&(i, b, [cx, cy, cw, ch])) = self
+                .canvases
+                .iter()
+                .find(|(_, _, [cx, cy, cw, ch])| ui::hovered((x, y), *cx, *cy, *cw, *ch))
+        {
+            if !drag {
+                events.push(Event::ButtonClick);
+            }
+            events.push(Event::NativeCanvas(i, b, [(x - cx).clamp(0.0, cw), (y - cy).clamp(0.0, ch)]));
+            return events;
+        }
         if !drag && matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds) {
             let search = &mut self.settings_search;
             search.focused = ui::hovered((x, y), search.x, search.y, search.width, search.height);
@@ -5861,6 +5919,46 @@ mod tests {
         assert_eq!(key_label(&mut ui, &s).unwrap().0, "R");
         let saved = crate::mod_list::ModList::parse(&s.mods.serialize());
         assert_eq!(saved.keys_of("zoom"), vec![("zoom", "key.keyboard.r")]);
+    }
+
+    /// A native mod's drawn area (`\u{4}height`) takes its height in the list and hands clicks
+    /// back from its top left; a label's `\u{3}tooltip` is left off the button and shown.
+    #[test]
+    fn a_native_mods_area_takes_clicks_and_labels_keep_tooltips() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        s.mods.installed.push(crate::mod_list::Installed {
+            id: "lyrics".into(),
+            title: "Lyrics 1.0.0".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(crate::mod_list::NativePage {
+                keys: Vec::new(),
+                buttons: vec!["\u{4}60".into(), "Glow: ON\u{3}A halo behind words".into()],
+            }),
+        });
+        ui.show(Page::NativeMod(0));
+        let (widgets, ..) = ui.layout(&s, size.0, size.1);
+        let &[(0, 0, [x, y, w, h])] = ui.native_canvases() else {
+            panic!("one area: {:?}", ui.native_canvases());
+        };
+        assert_eq!((w, h), (310.0, 60.0));
+        let glow = widgets
+            .iter()
+            .find(|wd| matches!(wd.kind, WKind::Button { act: Act::NativeButton(0, 1), .. }))
+            .expect("the button under the area");
+        assert!(glow.y >= y + h);
+        let WKind::Button { label, .. } = &glow.kind else {
+            unreachable!()
+        };
+        assert_eq!(label.plain(), "Glow: ON");
+        let tip = tooltip_text(&s, glow).map(|t| t.plain());
+        assert_eq!(tip.as_deref(), Some("A halo behind words"));
+        let events = ui.click(&mut s, &atlas, x + 10.0, y + 5.0, size, [480, 240], false, false);
+        assert_eq!(events.last(), Some(&Event::NativeCanvas(0, 0, [10.0, 5.0])));
     }
 
     /// A native mod's text field (`caption\u{1}value`) types until Enter and hands the text

@@ -173,7 +173,11 @@ impl Game<'_> {
         self.watch_pack_folder();
         let mut ui = std::mem::take(&mut self.ui.options);
         ui.draw(&self.settings, batch, &self.gui.atlas, self.cursor);
+        let canvases = ui.native_canvases().to_vec();
         self.ui.options = ui;
+        for (i, b, rect) in canvases {
+            self.native_settings_canvas_draw(i, b, batch, rect);
+        }
         self.show_calibration(batch.height);
     }
     /// HDR calibration's test picture to the renderer, full screen while it runs: the
@@ -402,6 +406,7 @@ impl Game<'_> {
                 Event::NativeSettings(i) => self.native_settings_refresh(i),
                 Event::NativeButton(i, b) => self.native_settings_event(i, b),
                 Event::NativeText(i, b, text) => self.native_settings_text_event(i, b, &text),
+                Event::NativeCanvas(i, b, at) => self.native_settings_canvas_event(i, b, at),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
                 Event::Narrator => self.narrator_status_changed(),
             }

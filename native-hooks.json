@@ -545,6 +545,16 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_text"
     },
     {
+      "name": "settings_canvas",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_canvas"
+    },
+    {
+      "name": "settings_canvas_click",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_canvas_click"
+    },
+    {
       "name": "debug_overlay",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_debug_overlay"

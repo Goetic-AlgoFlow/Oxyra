@@ -597,7 +597,10 @@ impl Loading {
                     &mut self.menu.narrator_toast,
                 ),
                 // Mods' settings pages open only in a running game.
-                Event::NativeSettings(_) | Event::NativeButton(..) | Event::NativeText(..) => {}
+                Event::NativeSettings(_)
+                | Event::NativeButton(..)
+                | Event::NativeText(..)
+                | Event::NativeCanvas(..) => {}
                 // The startup menu runs before the game opens a control socket,
                 // and before its sound engine (no clicks, no volume previews).
                 Event::ButtonClick
