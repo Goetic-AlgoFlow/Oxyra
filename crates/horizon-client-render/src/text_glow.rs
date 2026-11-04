@@ -1,7 +1,7 @@
 //! The glow layer: bloom for mods' glowing world text (`HudBatch::glow`).
 //! Those HUD vertices are drawn alone into a cleared texture the frame's size,
 //! halved, blurred by two rounds of a horizontal then a vertical Gaussian (the
-//! second twice as wide), and added to the frame. Only what a mod marks as
+//! second twice as wide), and laid over the frame (premultiplied). Only what a mod marks as
 //! glowing blooms: the rest of the frame is not read, so a bright sky does not
 //! glow and the cost is a few passes over a half-size texture.
 
@@ -14,7 +14,7 @@ const BLUR: [([f32; 2], f32); 4] = [
 ];
 /// The blurred layer is added this many times: blurring spreads a thin glyph's
 /// light over a wide halo, which alone would be faint.
-const STRENGTH: f32 = 2.5;
+const STRENGTH: f32 = 1.8;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -108,10 +108,10 @@ impl TextGlow {
                 cache: None,
             })
         };
-        let additive = wgpu::BlendState {
+        let over = wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
                 operation: wgpu::BlendOperation::Add,
             },
             alpha: wgpu::BlendComponent {
@@ -123,7 +123,7 @@ impl TextGlow {
         let (down, blur, add) = (
             pipeline("fs_down", None),
             pipeline("fs_blur", None),
-            pipeline("fs_add", Some(additive)),
+            pipeline("fs_add", Some(over)),
         );
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Text glow"),

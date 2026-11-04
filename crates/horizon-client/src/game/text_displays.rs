@@ -422,6 +422,8 @@ impl Game<'_> {
         // A pack draws nothing over its own image: see-through text goes on it, projected.
         // Glowing text is always projected: it lights the HUD's glow layer.
         let view_proj = self.frame_view_proj;
+        // With a glow, see-through text goes on the HUD too, over its glow.
+        let glowing = texts.iter().any(|t| t.glow);
         // Packs light text as name tags (Complementary's `entity.50112=name_tag`: unlit, bright).
         if !texts.is_empty() {
             self.mark_translucent_entity(normal.len(), "minecraft:name_tag");
@@ -442,7 +444,7 @@ impl Game<'_> {
                     batch.text(&self.gui.atlas, &t.text, 0.0, 0.0, color, t.shadow);
                 }
             }
-            if t.glow || (t.through && pack) {
+            if t.glow || (t.through && (pack || glowing)) {
                 let clip = view_proj * t.pose;
                 for quad in batch.vertices.as_chunks::<6>().0 {
                     let mut corners = [[0.0; 2]; 4];

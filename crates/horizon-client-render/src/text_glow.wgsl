@@ -35,9 +35,11 @@ struct Out {
     c += textureSampleLevel(src, samp, in.uv - d * 3.2307692, 0.0) * 0.0702703;
     return c;
 }
-// Added to the frame (blend One, One on colour; the frame's alpha kept). The
-// layer is premultiplied: a glyph drawn over cleared black left colour × alpha.
+// Laid over the frame, premultiplied (blend One, OneMinusSrcAlpha; the frame's
+// alpha kept): a glyph drawn over cleared black left colour × alpha. Over a dark
+// sky it adds light, over a bright one it tints instead of turning white.
 @fragment fn fs_add(in: Out) -> @location(0) vec4<f32> {
-    let c = textureSampleLevel(src, samp, in.uv, 0.0);
-    return vec4(min(c.rgb * pass_.strength.x, vec3(1.0)), 0.0);
+    let c = textureSampleLevel(src, samp, in.uv, 0.0) * pass_.strength.x;
+    let a = min(c.a, 1.0);
+    return vec4(min(c.rgb, vec3(a)), a);
 }
