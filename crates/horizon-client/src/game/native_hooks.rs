@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 371 adds additive world quads (`native_world_quads_additive`): light that adds to
+//! what is behind it, tested against the world's depth, as the sun or the dragon's rays.
+//!
 //! API 370 lets a mod's world text glow (`NativeWorldText::glow`): it lights a bloom
 //! layer, blurred and added to the frame, instead of being drawn sharp. A mod's settings page
 //! gets areas the mod draws itself (`\u{4}height` labels: `native_settings_canvas`, clicks in
@@ -1099,7 +1102,7 @@ pub(crate) struct NativeWorldText {
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 370;
+pub(crate) const NATIVE_HOOKS_API: u32 = 371;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -9676,6 +9679,18 @@ impl Game<'_> {
     /// their blending): push four camera-relative vertices per quad. `partial` is the frame's
     /// part of a tick. API 81.
     pub(super) fn native_world_quads(
+        &mut self,
+        camera: glam::DVec3,
+        partial: f32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        let _ = (camera, partial, out);
+    }
+    /// Additive world quads: four camera-relative vertices per quad, textured from the HUD and
+    /// particle atlas (`ParticleEngine::sprite`, `native_mod_image`'s sprite), their colour times
+    /// its alpha added to what is behind (`SrcAlpha, One`), hidden by what stands in front and
+    /// writing no depth. Set `light` to 0xF0F0 for full brightness. API 371.
+    pub(super) fn native_world_quads_additive(
         &mut self,
         camera: glam::DVec3,
         partial: f32,

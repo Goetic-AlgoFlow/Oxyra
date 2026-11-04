@@ -545,6 +545,11 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_text"
     },
     {
+      "name": "world_quads_additive",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_world_quads_additive"
+    },
+    {
       "name": "settings_canvas",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_canvas"

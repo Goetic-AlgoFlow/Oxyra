@@ -15557,6 +15557,7 @@ impl Game<'_> {
             self.dragon_geometry(camera, alpha, &mut dragon, &mut additive);
             self.dragon_fireball_geometry(camera, alpha, &mut dragon);
             entities.extend(dragon);
+            self.native_world_quads_additive(camera, alpha as f32, &mut additive);
         }
         let (celestial, stars) = if title {
             (Vec::new(), None)
