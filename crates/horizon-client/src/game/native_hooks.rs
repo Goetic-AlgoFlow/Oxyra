@@ -9963,11 +9963,11 @@ impl Game<'_> {
         let style = horizon_client::text::Style { font: t.font.clone(), ..Default::default() };
         let text = horizon_client::text::Text::styled(t.text.as_str(), style);
         let rings: &[[f32; 2]] = if t.glow {
-            &[[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0], [0.7, 0.7], [-0.7, 0.7], [0.7, -0.7], [-0.7, -0.7]]
+            &[[1.5, 0.0], [-1.5, 0.0], [0.0, 1.5], [0.0, -1.5], [1.0, 1.0], [-1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
         } else {
             &[[0.0, 0.0]]
         };
-        let alpha = if t.glow { a / 4 } else { a };
+        let alpha = if t.glow { a / 10 } else { a };
         glyphs.text_styled(&self.gui.atlas, &text, 0.0, 0.0, horizon_client::hud::rgba(r, g, b, alpha), t.shadow && !t.glow);
         for [ox, oy] in rings {
             for quad in glyphs.vertices.as_chunks::<6>().0 {
