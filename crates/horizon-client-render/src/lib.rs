@@ -58,6 +58,7 @@ pub mod light;
 pub mod lod;
 pub mod logging;
 pub mod menu_blur;
+pub mod text_glow;
 pub mod mesher;
 pub mod minimap;
 pub mod mipmap;

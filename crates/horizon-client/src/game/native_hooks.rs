@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 370 lets a mod's world text glow (`NativeWorldText::glow`): it lights a bloom
+//! layer, blurred and added to the frame, instead of being drawn sharp.
+//!
 //! API 369 lets a mod pick the font of its world text (`NativeWorldText::font`) and measure
 //! text in it (`native_text_width_in`).
 //!
@@ -1085,12 +1088,15 @@ pub(crate) struct NativeWorldText {
     /// The font, as a text component names it (`minecraft:uniform`, `minecraft:alt`, a
     /// resource pack's own); None for the default. API 369.
     pub font: Option<String>,
+    /// Glow only: the text is not drawn itself but lights the bloom layer (blurred, added to
+    /// the frame over everything); its colour and alpha are the glow's. API 370.
+    pub glow: bool,
 }
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 369;
+pub(crate) const NATIVE_HOOKS_API: u32 = 370;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.

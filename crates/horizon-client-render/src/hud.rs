@@ -1362,6 +1362,9 @@ pub struct HudBatch {
     pub game_time: f32,
     /// Screen's first vertex: the preceding HUD is part of its blurred background.
     pub blur_at: u32,
+    /// Vertices that only glow: drawn blurred and added to the frame (`text_glow`),
+    /// before the vertices after them. Within `0..blur_at` when a menu blurs.
+    pub glow: std::ops::Range<u32>,
     /// Player object profiles encountered while painting text this frame.
     pub inline_profiles: Vec<serde_json::Value>,
 }
@@ -1419,6 +1422,7 @@ impl HudBatch {
             glint_alpha: 0.75,
             game_time: 0.0,
             blur_at: 0,
+            glow: 0..0,
             inline_profiles: Vec::new(),
         }
     }
@@ -3914,6 +3918,7 @@ texture=wide",
                 glint_alpha: 0.75,
                 game_time: 0.0,
                 blur_at: 0,
+                glow: 0..0,
                 inline_profiles: Vec::new(),
             };
             for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {

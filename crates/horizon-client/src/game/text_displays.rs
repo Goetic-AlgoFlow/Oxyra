@@ -418,8 +418,10 @@ impl Game<'_> {
         self.native_world_text(camera, partial as f32, &mut texts);
         let pack = self.pack_ids.is_some();
         self.mod_text_overlay.clear();
+        self.mod_text_glow.clear();
         // A pack draws nothing over its own image: see-through text goes on it, projected.
-        let overlay = pack.then_some(self.frame_view_proj);
+        // Glowing text is always projected: it lights the HUD's glow layer.
+        let view_proj = self.frame_view_proj;
         // Packs light text as name tags (Complementary's `entity.50112=name_tag`: unlit, bright).
         if !texts.is_empty() {
             self.mark_translucent_entity(normal.len(), "minecraft:name_tag");
@@ -440,9 +442,7 @@ impl Game<'_> {
                     batch.text(&self.gui.atlas, &t.text, 0.0, 0.0, color, t.shadow);
                 }
             }
-            if t.through
-                && let Some(view_proj) = overlay
-            {
+            if t.glow || (t.through && pack) {
                 let clip = view_proj * t.pose;
                 for quad in batch.vertices.as_chunks::<6>().0 {
                     let mut corners = [[0.0; 2]; 4];
@@ -456,7 +456,8 @@ impl Game<'_> {
                         uvs[k] = v.uv;
                     }
                     if !behind {
-                        self.mod_text_overlay.push((corners, uvs, quad[0].color));
+                        let to = if t.glow { &mut self.mod_text_glow } else { &mut self.mod_text_overlay };
+                        to.push((corners, uvs, quad[0].color));
                     }
                 }
                 self.map_patches.extend(batch.patches);

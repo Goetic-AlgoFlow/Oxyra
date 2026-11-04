@@ -267,6 +267,12 @@ impl Game<'_> {
         }
         // Mods' see-through world text under a shader pack (`mod_world_text_geometry`).
         let (w, h) = (batch.width, batch.height);
+        let start = batch.vertices.len() as u32;
+        for (ndc, uv, color) in &self.mod_text_glow {
+            let p = ndc.map(|[x, y]| [(x * 0.5 + 0.5) * w, (0.5 - y * 0.5) * h]);
+            batch.quad(p, *uv, *color);
+        }
+        batch.glow = start..batch.vertices.len() as u32;
         for (ndc, uv, color) in &self.mod_text_overlay {
             let p = ndc.map(|[x, y]| [(x * 0.5 + 0.5) * w, (0.5 - y * 0.5) * h]);
             batch.quad(p, *uv, *color);

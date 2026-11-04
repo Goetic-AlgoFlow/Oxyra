@@ -1223,6 +1223,8 @@ pub struct Renderer {
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
+    /// Bloom for mods' glowing text (`HudBatch::glow`), made on first use.
+    text_glow: Option<crate::text_glow::TextGlow>,
     /// `post_effect` chains, made on first use.
     post_effects: Option<crate::post_chain::PostEffects>,
     /// Where a screenshot's frame is drawn when the swapchain cannot be read back.
@@ -4470,6 +4472,7 @@ impl Renderer {
             separate_ao: false,
             hud,
             menu_blur: None,
+            text_glow: None,
             post_effects: None,
             readback: readback::Readback::default(),
             info,
@@ -10497,13 +10500,31 @@ impl Renderer {
             .menu_blur
             .filter(|_| self.config.usage.contains(wgpu::TextureUsages::COPY_SRC));
         let blur_at = menu_blur.map_or(0, |_| frame.hud.blur_at);
+        let size = [self.config.width, self.config.height];
+        let total = frame.hud.vertices.len() as u32;
+        let glow = Some(frame.hud.glow.clone())
+            .filter(|g| g.start < g.end && g.end <= total && (menu_blur.is_none() || g.end <= blur_at));
+        // The HUD before the glowing vertices, then their bloom, then the rest.
+        let mut at = 0;
+        if let Some(glow) = glow {
+            self.hud.draw_range(encoder, view_target, &self.depth, frame.hud, size, 0..glow.start, timing.as_mut());
+            let device = &self.device;
+            let format = self.config.format;
+            let layer = self.text_glow.get_or_insert_with(|| crate::text_glow::TextGlow::new(device, format));
+            let target = layer.begin(device, encoder, size);
+            self.hud.draw_range(encoder, target, &self.depth, frame.hud, size, glow.clone(), None);
+            layer.apply(device, &self.queue, encoder, view_target, timing.as_mut());
+            at = glow.end;
+        } else if let Some(layer) = &mut self.text_glow {
+            layer.release();
+        }
         self.hud.draw_range(
             encoder,
             view_target,
             &self.depth,
             frame.hud,
-            [self.config.width, self.config.height],
-            0..blur_at,
+            size,
+            at..blur_at.max(at),
             timing.as_mut(),
         );
         if let Some(radius) = menu_blur {
@@ -10530,8 +10551,8 @@ impl Renderer {
             view_target,
             &self.depth,
             frame.hud,
-            [self.config.width, self.config.height],
-            blur_at..frame.hud.vertices.len() as u32,
+            size,
+            blur_at.max(at)..total,
             timing.as_mut(),
         );
         if overlay.real {

@@ -2418,6 +2418,8 @@ struct Game<'a> {
     /// Mods' see-through world text under a shader pack, which has no see-through pass: glyph
     /// quads projected to the screen (NDC corners, UVs, colour), drawn with the HUD.
     mod_text_overlay: Vec<([[f32; 2]; 4], [[f32; 2]; 4], u32)>,
+    /// The same for mods' glowing text: the HUD's glow layer (`HudBatch::glow`).
+    mod_text_glow: Vec<([[f32; 2]; 4], [[f32; 2]; 4], u32)>,
     /// This frame's camera-relative world to clip space (reversed Z), for `mod_text_overlay`.
     frame_view_proj: glam::Mat4,
     /// The first-person player's model, which only a native pack's shadow pass draws.
@@ -18482,6 +18484,7 @@ impl<'a> Game<'a> {
             luminance: Default::default(),
             see_through_vertices: Vec::new(),
             mod_text_overlay: Vec::new(),
+            mod_text_glow: Vec::new(),
             frame_view_proj: glam::Mat4::IDENTITY,
             shadow_only_vertices: Default::default(),
             entity_spans: Default::default(),
