@@ -430,7 +430,16 @@ impl Game<'_> {
             let mut batch = HudBatch::new([1, 1]);
             let [a, r, g, b] = t.color.to_be_bytes();
             let color = horizon_client::hud::rgba(r, g, b, a);
-            batch.text(&self.gui.atlas, &t.text, 0.0, 0.0, color, t.shadow);
+            match &t.font {
+                Some(font) => {
+                    let style = horizon_client::text::Style { font: Some(font.clone()), ..Default::default() };
+                    let text = horizon_client::text::Text::styled(t.text.as_str(), style);
+                    batch.text_styled(&self.gui.atlas, &text, 0.0, 0.0, color, t.shadow);
+                }
+                None => {
+                    batch.text(&self.gui.atlas, &t.text, 0.0, 0.0, color, t.shadow);
+                }
+            }
             if t.through
                 && let Some(view_proj) = overlay
             {

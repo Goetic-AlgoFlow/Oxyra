@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 369 lets a mod pick the font of its world text (`NativeWorldText::font`) and measure
+//! text in it (`native_text_width_in`).
+//!
 //! API 368 lets a mod read the window's Win32 messages before winit and hand the game the mouse
 //! motion it gathered (`native_raw_input`).
 //!
@@ -1079,12 +1082,15 @@ pub(crate) struct NativeWorldText {
     pub shadow: bool,
     /// Over everything, as a see-through text display; else hidden by what stands in front.
     pub through: bool,
+    /// The font, as a text component names it (`minecraft:uniform`, `minecraft:alt`, a
+    /// resource pack's own); None for the default. API 369.
+    pub font: Option<String>,
 }
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 368;
+pub(crate) const NATIVE_HOOKS_API: u32 = 369;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -8066,6 +8072,16 @@ impl Game<'_> {
     /// The width of `text` in GUI pixels.
     pub(super) fn native_text_width(&self, text: &str) -> f32 {
         HudBatch::text_width(&self.gui.atlas, text)
+    }
+    /// `native_text_width` in the font `font` (a text component's name). API 369.
+    pub(super) fn native_text_width_in(&self, text: &str, font: Option<&str>) -> f32 {
+        match font {
+            Some(font) => self.gui.atlas.font.width_text(&horizon_client::text::Text::styled(
+                text,
+                horizon_client::text::Style { font: Some(font.to_owned()), ..Default::default() },
+            )),
+            None => self.native_text_width(text),
+        }
     }
     /// A rectangle in GUI pixels, `argb` (0x78000000 is the extras' box).
     pub(super) fn native_fill(&self, batch: &mut HudBatch, rect: [f32; 4], argb: u32) {
