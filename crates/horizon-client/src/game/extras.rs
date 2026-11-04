@@ -265,6 +265,12 @@ impl Game<'_> {
             };
             extras_hud::draw_minimap(batch, atlas, &mut corners, &look);
         }
+        // Mods' see-through world text under a shader pack (`mod_world_text_geometry`).
+        let (w, h) = (batch.width, batch.height);
+        for (ndc, uv, color) in &self.mod_text_overlay {
+            let p = ndc.map(|[x, y]| [(x * 0.5 + 0.5) * w, (0.5 - y * 0.5) * h]);
+            batch.quad(p, *uv, *color);
+        }
         self.native_hud(batch, &mut corners);
     }
     /// The height the status effect icons take at the top right

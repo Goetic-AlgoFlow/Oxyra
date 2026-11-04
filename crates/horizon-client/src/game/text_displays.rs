@@ -417,6 +417,11 @@ impl Game<'_> {
         let mut texts = Vec::new();
         self.native_world_text(camera, partial as f32, &mut texts);
         let pack = self.pack_ids.is_some();
+        self.mod_text_overlay.clear();
+        // A pack draws nothing over its own image: see-through text goes on it, projected.
+        let overlay = self.native_camera_frame.as_ref().filter(|_| pack).map(|c| {
+            glam::Mat4::from_cols_array(&c.projection) * glam::Mat4::from_cols_array(&c.view)
+        });
         // Packs light text as name tags (Complementary's `entity.50112=name_tag`: unlit, bright).
         if !texts.is_empty() {
             self.mark_translucent_entity(normal.len(), "minecraft:name_tag");
@@ -428,6 +433,28 @@ impl Game<'_> {
             let [a, r, g, b] = t.color.to_be_bytes();
             let color = horizon_client::hud::rgba(r, g, b, a);
             batch.text(&self.gui.atlas, &t.text, 0.0, 0.0, color, t.shadow);
+            if t.through
+                && let Some(view_proj) = overlay
+            {
+                let clip = view_proj * t.pose;
+                for quad in batch.vertices.as_chunks::<6>().0 {
+                    let mut corners = [[0.0; 2]; 4];
+                    let mut uvs = [[0.0; 2]; 4];
+                    let mut behind = false;
+                    for (k, i) in text_display::CORNERS.into_iter().enumerate() {
+                        let v = quad[i];
+                        let p = clip * glam::Vec4::new(v.pos[0], v.pos[1], v.depth, 1.0);
+                        behind |= p.w <= 1e-4;
+                        corners[k] = [p.x / p.w, p.y / p.w];
+                        uvs[k] = v.uv;
+                    }
+                    if !behind {
+                        self.mod_text_overlay.push((corners, uvs, quad[0].color));
+                    }
+                }
+                self.map_patches.extend(batch.patches);
+                continue;
+            }
             let (out, layer) = if t.through && !pack {
                 (&mut *see_through, 2)
             } else {

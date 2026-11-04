@@ -2415,6 +2415,9 @@ struct Game<'a> {
     luminance: std::cell::OnceCell<horizon_client::dynamic_light::Luminance>,
     /// Name tags drawn over everything (`RenderPipelines.TEXT_SEE_THROUGH`).
     see_through_vertices: Vec<Vertex>,
+    /// Mods' see-through world text under a shader pack, which has no see-through pass: glyph
+    /// quads projected to the screen (NDC corners, UVs, colour), drawn with the HUD.
+    mod_text_overlay: Vec<([[f32; 2]; 4], [[f32; 2]; 4], u32)>,
     /// The first-person player's model, which only a native pack's shadow pass draws.
     shadow_only_vertices: std::cell::RefCell<Vec<Vertex>>,
     /// Runs of `entity_vertices` by entity, for a shader pack's per-entity draws; recorded only
@@ -18468,6 +18471,7 @@ impl<'a> Game<'a> {
             dynamic_lights: Vec::new(),
             luminance: Default::default(),
             see_through_vertices: Vec::new(),
+            mod_text_overlay: Vec::new(),
             shadow_only_vertices: Default::default(),
             entity_spans: Default::default(),
             entity_motion: Default::default(),
