@@ -2354,6 +2354,13 @@ pub(crate) fn copy_base(from: &Path, to: &Path, target: Target) -> Result<(), St
             continue;
         }
         let to = to.join(&name);
+        // The prepared resources are the base's, shared rather than copied: a copy is ~22,000 new
+        // files the disk and the virus scanner read cold at the build's first start, and its
+        // `horizon-data.bin` (made for the base's folder) is refused and written again: 40 s and
+        // more before a world opens. A junction keeps the base's warm files and data file.
+        if target == Target::Client && name == ".local" && share_prepared(&entry.path(), &to).is_ok() {
+            continue;
+        }
         let copied = if entry.path().is_dir() {
             backend::copy_dir(&entry.path(), &to)
         } else {
@@ -2364,6 +2371,34 @@ pub(crate) fn copy_base(from: &Path, to: &Path, target: Target) -> Result<(), St
         copied.map_err(|e| format!("Could not copy {}: {e}", entry.path().display()))?;
     }
     Ok(())
+}
+
+/// `to` made a link to the folder `from`: a junction on Windows (no rights needed), a symbolic
+/// link elsewhere. Removing the build removes the link, not the base's folder.
+fn share_prepared(from: &Path, to: &Path) -> std::io::Result<()> {
+    let from = std::path::absolute(from)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(to)
+            .arg(&from)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()?;
+        if !status.success() || !to.join("horizon-client").is_dir() {
+            let _ = fs::remove_dir(to);
+            return Err(std::io::Error::other("mklink /J failed"));
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        std::os::unix::fs::symlink(&from, to)
+    }
 }
 
 /// Whether a file of the version a build starts from goes into the new build. The game (the
