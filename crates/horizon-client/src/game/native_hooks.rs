@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 367 lets a mod draw text in the world, as a text display does (`native_world_text`).
+//!
 //! API 366 lets a mod draw blocks itself in the block entities' pass, shaded as they are
 //! (`native_block_draws`, `native_draw_state`).
 //!
@@ -1062,10 +1064,24 @@ impl Game<'_> {
 /// yet.
 pub(super) use horizon_world::level::flags;
 
+/// Text a native mod draws in the world (`native_world_text`). API 367.
+#[derive(Clone, Debug)]
+pub(crate) struct NativeWorldText {
+    /// Where the text goes, from the camera: a unit is a font pixel, x right and y down, the
+    /// text's top-left corner at the origin (a text display's frame).
+    pub pose: glam::Mat4,
+    pub text: String,
+    /// ARGB: the alpha fades the text.
+    pub color: u32,
+    pub shadow: bool,
+    /// Over everything, as a see-through text display; else hidden by what stands in front.
+    pub through: bool,
+}
+
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 366;
+pub(crate) const NATIVE_HOOKS_API: u32 = 367;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -9751,6 +9767,17 @@ impl Game<'_> {
     /// with `native_draw_state`. Asked once a frame. API 366.
     pub(super) fn native_block_draws(&self, camera: glam::DVec3, draw: &mut BlockEntityDraw) {
         let _ = (camera, draw);
+    }
+    /// Text a mod draws in the world this frame, `partial` of a tick on, in vanilla's font as a
+    /// text display draws it: push a [`NativeWorldText`] to `out`, its pose from `camera`.
+    /// Asked once a frame, after the text displays. API 367.
+    pub(super) fn native_world_text(
+        &self,
+        camera: glam::DVec3,
+        partial: f32,
+        out: &mut Vec<NativeWorldText>,
+    ) {
+        let _ = (camera, partial, out);
     }
     // Oxyra's helpers for native mods, which no hook point is.
     /// The mob `id` as its vanilla model draws it this frame (`partial` of a tick on): its feet in

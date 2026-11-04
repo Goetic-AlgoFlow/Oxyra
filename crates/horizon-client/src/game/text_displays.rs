@@ -403,6 +403,52 @@ impl Game<'_> {
     }
 }
 
+impl Game<'_> {
+    /// The text native mods draw in the world (`native_world_text`), as the text displays' text:
+    /// lit full bright, `through` over everything.
+    pub(super) fn mod_world_text_geometry(
+        &mut self,
+        camera: glam::DVec3,
+        partial: f64,
+        normal: &mut Vec<Vertex>,
+        see_through: &mut Vec<Vertex>,
+    ) {
+        let mut texts = Vec::new();
+        self.native_world_text(camera, partial as f32, &mut texts);
+        let light = horizon_client::block_entity_render::vertex_light(0xFF);
+        for t in texts.into_iter().filter(|t| t.pose.is_finite() && !t.text.is_empty()) {
+            let mut batch = HudBatch::new([1, 1]);
+            let [a, r, g, b] = t.color.to_be_bytes();
+            let color = horizon_client::hud::rgba(r, g, b, a);
+            batch.text(&self.gui.atlas, &t.text, 0.0, 0.0, color, t.shadow);
+            let (out, layer) = if t.through {
+                (&mut *see_through, 2)
+            } else {
+                (&mut *normal, TEXT_POLYGON_OFFSET_OVERLAY)
+            };
+            for quad in batch.vertices.as_chunks::<6>().0 {
+                for i in text_display::CORNERS {
+                    let v = quad[i];
+                    let point = t
+                        .pose
+                        .transform_point3(glam::Vec3::new(v.pos[0], v.pos[1], v.depth));
+                    out.push(Vertex {
+                        pos: point.to_array(),
+                        uv: v.uv,
+                        color: v.color,
+                        light,
+                        layer,
+                        normal: [0; 4],
+                        glint_uv: [0.0, 0.0],
+                    });
+                }
+            }
+            self.text_display_vertices += batch.vertices.len() / 6 * 4;
+            self.map_patches.extend(batch.patches);
+        }
+    }
+}
+
 /// Whether vanilla's built-in block models give this block a special model,
 /// drawn by its block-entity renderer.
 fn has_special_model(block: &str) -> bool {

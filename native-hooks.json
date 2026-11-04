@@ -475,6 +475,11 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_block_draws"
     },
     {
+      "name": "world_text",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_world_text"
+    },
+    {
       "name": "entity_quads",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_quads"

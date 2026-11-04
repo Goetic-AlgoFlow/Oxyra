@@ -10680,6 +10680,7 @@ impl Game<'_> {
         self.test_instance_marker_geometry(camera, &mut out, &mut see_through);
         self.debug_renderer_geometry(camera, &mut out);
         self.text_display_geometry(camera, alpha, &mut out, &mut see_through);
+        self.mod_world_text_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         laps.lap("eg_name_tags");
         // Entity shadows (EntityRenderer.extractShadow).
