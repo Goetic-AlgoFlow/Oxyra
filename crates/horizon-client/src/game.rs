@@ -16686,23 +16686,8 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
-        // A composited view renders offscreen but its keyboard/mouse owner still
-        // controls a visible native window. A headless offscreen run never does.
-        if self.pending_save.is_none()
-            && self.captured
-            && self.focused
-            && self.keyboard_mouse
-            && (!self.options.offscreen || self.split_window)
-            && self.screen == Screen::Playing
-            && let DeviceEvent::MouseMotion { delta: (x, y) } = event
-        {
-            // MouseHandler.onMove with the pointer grabbed; applied once per frame.
-            self.note_input(
-                input_trace::InputOrigin::User,
-                input_trace::TraceKind::Motion { x, y },
-            );
-            self.mouse.on_move(0.0, 0.0, x, y, true, true);
-            self.last_input = Instant::now();
+        if let DeviceEvent::MouseMotion { delta: (x, y) } = event {
+            self.raw_mouse_motion(x, y);
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -18203,6 +18188,18 @@ impl Game<'_> {
     /// winit's `about_to_wait`: what happens between frames (stop requests, the closing
     /// save, world entry, the control socket, pads), then the next frame.
     pub(super) fn idle(&mut self, event_loop: &dyn EventLoopCtl) {
+        // Only the game the keyboard and mouse drive asks: the mouse is its.
+        if self.keyboard_mouse {
+            let (mut filter, mut motion) = (None, None);
+            self.native_raw_input(&mut filter, &mut motion);
+            #[cfg(windows)]
+            MSG_FILTER.with(|f| f.set(filter));
+            #[cfg(not(windows))]
+            let _ = filter;
+            if let Some((x, y)) = motion {
+                self.raw_mouse_motion(x, y);
+            }
+        }
         // A splitscreen player's game has nothing to save: P1's shuts the process down.
         if horizon_threads::stop_requests() > 0
             && !self.options.split_guest
@@ -20455,6 +20452,48 @@ fn leave_fullscreen_after(
     }
 }
 
+/// Raw mouse motion, from winit's device events or a native mod that reads it itself
+/// (`native_raw_input`).
+impl Game<'_> {
+    fn raw_mouse_motion(&mut self, x: f64, y: f64) {
+        // A composited view renders offscreen but its keyboard/mouse owner still
+        // controls a visible native window. A headless offscreen run never does.
+        if self.pending_save.is_none()
+            && self.captured
+            && self.focused
+            && self.keyboard_mouse
+            && (!self.options.offscreen || self.split_window)
+            && self.screen == Screen::Playing
+        {
+            // MouseHandler.onMove with the pointer grabbed; applied once per frame.
+            self.note_input(
+                input_trace::InputOrigin::User,
+                input_trace::TraceKind::Motion { x, y },
+            );
+            self.mouse.on_move(0.0, 0.0, x, y, true, true);
+            self.last_input = Instant::now();
+        }
+    }
+}
+
+#[cfg(windows)]
+thread_local! {
+    /// The Win32 message filter a native mod set (`native_raw_input`), on the event loop's thread.
+    static MSG_FILTER: std::cell::Cell<Option<fn(*const std::ffi::c_void) -> bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// winit's event loop; on Windows, each message first goes through a native mod's filter.
+fn new_event_loop() -> std::result::Result<EventLoop<()>, winit::error::EventLoopError> {
+    let mut builder = EventLoop::builder();
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::EventLoopBuilderExtWindows as _;
+        builder.with_msg_hook(|msg| MSG_FILTER.with(|f| f.get()).is_some_and(|f| f(msg)));
+    }
+    builder.build()
+}
+
 fn run_event_loop(mut game: Game<'_>) -> Result<()> {
     if game.options.headless {
         // No display to open winit's loop on: the game's own loop.
@@ -20465,7 +20504,7 @@ fn run_event_loop(mut game: Game<'_>) -> Result<()> {
         return game.error.take().map_or(Ok(()), Err);
     }
     let mut split = split::Split::new(game);
-    let result = EventLoop::new()?.run_app(&mut split);
+    let result = new_event_loop()?.run_app(&mut split);
     game = split.host;
     narrator::stop();
     leave_fullscreen_after(&result, &mut game.settings);
@@ -20932,7 +20971,7 @@ fn run_loading(
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));
-    let result = EventLoop::new()?.run_app(&mut app);
+    let result = new_event_loop()?.run_app(&mut app);
     narrator::stop();
     match &mut app {
         // Ready: splitscreen around P1's game.

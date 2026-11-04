@@ -480,6 +480,11 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_world_text"
     },
     {
+      "name": "raw_input",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_raw_input"
+    },
+    {
       "name": "entity_quads",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_quads"

@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 368 lets a mod read the window's Win32 messages before winit and hand the game the mouse
+//! motion it gathered (`native_raw_input`).
+//!
 //! API 367 lets a mod draw text in the world, as a text display does (`native_world_text`).
 //!
 //! API 366 lets a mod draw blocks itself in the block entities' pass, shaded as they are
@@ -1081,7 +1084,7 @@ pub(crate) struct NativeWorldText {
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 367;
+pub(crate) const NATIVE_HOOKS_API: u32 = 368;
 
 impl GameLevel<'_> {
     /// A hopper at `pos` is about to pick up `count` of `item`. Set `cancel` to leave the dropped stack in the world. Server-side. 232.
@@ -9778,6 +9781,18 @@ impl Game<'_> {
         out: &mut Vec<NativeWorldText>,
     ) {
         let _ = (camera, partial, out);
+    }
+    /// Asked between frames by the game the keyboard and mouse drive. On Windows, `filter` sees
+    /// each message of the event loop before winit does (the `MSG` it points to) and returns
+    /// true to keep it from winit, as with winit's `with_msg_hook`; it stays until the next ask.
+    /// `motion` is raw mouse motion the mod gathered since the last ask (counts, x right and y
+    /// down), applied as winit's `DeviceEvent::MouseMotion` is. API 368.
+    pub(super) fn native_raw_input(
+        &self,
+        filter: &mut Option<fn(*const std::ffi::c_void) -> bool>,
+        motion: &mut Option<(f64, f64)>,
+    ) {
+        let _ = (filter, motion);
     }
     // Oxyra's helpers for native mods, which no hook point is.
     /// The mob `id` as its vanilla model draws it this frame (`partial` of a tick on): its feet in
