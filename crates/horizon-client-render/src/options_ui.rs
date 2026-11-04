@@ -1730,6 +1730,20 @@ fn native_pack_option_rows(s: &Settings, i: usize, at: u8) -> Vec<Row> {
     );
     rows
 }
+/// The picked shader pack's options page, if it has one.
+fn shader_options_act(s: &Settings) -> Option<Act> {
+    let i = s
+        .shader_packs
+        .iter()
+        .position(|p| p.file == s.horizon.shader_pack)?;
+    let pack = &s.shader_packs[i];
+    match pack.kind {
+        crate::shader_pack_list::Kind::Classic => Some(Act::ShaderOptions),
+        _ if pack.options.is_empty() => None,
+        crate::shader_pack_list::Kind::Horizon => Some(Act::NativePackOptions(i)),
+    }
+}
+
 fn shader_option_rows(s: &Settings) -> Vec<Row> {
     let Some(options) = &s.shader_options else {
         return vec![Row::Header("horizon.shader_options.loading")];
@@ -2722,25 +2736,15 @@ impl OptionsUi {
             }
             Page::NativeMod(i) => self.native_rows(s, i),
             Page::ShaderPacks => {
+                // The folder first; the picked pack's options beside Done.
+                let folder = Row::Buttons(
+                    button(0.0, 0.0, 310.0, tr("pack.openFolder"), Act::OpenShaderPackFolder),
+                    None,
+                );
                 if s.shader_packs.is_empty() {
-                    return vec![Row::Header("horizon.shader_packs.empty")];
+                    return vec![folder, Row::Header("horizon.shader_packs.empty")];
                 }
-                let picked = s
-                    .shader_packs
-                    .iter()
-                    .position(|p| p.file == s.horizon.shader_pack);
-                let options = picked.and_then(|i| {
-                    let pack = &s.shader_packs[i];
-                    let act = match pack.kind {
-                        crate::shader_pack_list::Kind::Classic => Act::ShaderOptions,
-                        _ if pack.options.is_empty() => return None,
-                        crate::shader_pack_list::Kind::Horizon => Act::NativePackOptions(i),
-                    };
-                    let label = tr("horizon.shader_options.open");
-                    Some(Row::Buttons(button(0.0, 0.0, 310.0, label, act), None))
-                });
-                options
-                    .into_iter()
+                std::iter::once(folder)
                     .chain(s.shader_packs.iter().enumerate().map(|(i, pack)| {
                         let kind = match pack.kind {
                             crate::shader_pack_list::Kind::Horizon => {
@@ -3291,7 +3295,9 @@ impl OptionsUi {
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
                 let folder = match page {
                     Page::Mods => Some(("horizon.mods.open_folder", Act::OpenModFolder)),
-                    Page::ShaderPacks => Some(("pack.openFolder", Act::OpenShaderPackFolder)),
+                    Page::ShaderPacks => {
+                        shader_options_act(s).map(|act| ("horizon.shader_options.open", act))
+                    }
                     Page::ShaderOptions => Some(("controls.reset", Act::ShaderReset)),
                     Page::NativePackOptions(i, _) => {
                         Some(("controls.reset", Act::NativePackReset(i)))
