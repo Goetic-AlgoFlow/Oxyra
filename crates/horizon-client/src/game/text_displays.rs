@@ -429,8 +429,9 @@ impl Game<'_> {
             self.mark_translucent_entity(normal.len(), "minecraft:name_tag");
         }
         for t in texts.into_iter().filter(|t| t.pose.is_finite() && !t.text.is_empty()) {
-            // Sky light only: a pack tints block light like a torch's.
-            let light = horizon_client::block_entity_render::vertex_light(if t.through { 0xFF } else { 0xF0 });
+            // Full bright, as name tags are; under a pack sky light only (a pack tints block
+            // light like a torch's).
+            let light = horizon_client::block_entity_render::vertex_light(if t.through || !pack { 0xFF } else { 0xF0 });
             let mut batch = HudBatch::new([1, 1]);
             let [a, r, g, b] = t.color.to_be_bytes();
             let color = horizon_client::hud::rgba(r, g, b, a);
