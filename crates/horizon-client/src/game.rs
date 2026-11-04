@@ -2418,6 +2418,8 @@ struct Game<'a> {
     /// Mods' see-through world text under a shader pack, which has no see-through pass: glyph
     /// quads projected to the screen (NDC corners, UVs, colour), drawn with the HUD.
     mod_text_overlay: Vec<([[f32; 2]; 4], [[f32; 2]; 4], u32)>,
+    /// This frame's camera-relative world to clip space (reversed Z), for `mod_text_overlay`.
+    frame_view_proj: glam::Mat4,
     /// The first-person player's model, which only a native pack's shadow pass draws.
     shadow_only_vertices: std::cell::RefCell<Vec<Vertex>>,
     /// Runs of `entity_vertices` by entity, for a shader pack's per-entity draws; recorded only
@@ -15476,6 +15478,14 @@ impl Game<'_> {
         let distance = (terrain_distance * 16) as f32;
         let depth_far =
             horizon_client::camera::depth_far(terrain_distance, self.settings.cloud_range);
+        self.frame_view_proj = glam::Mat4::perspective_rh(
+            fov_degrees.to_radians(),
+            size[0] as f32 / size[1].max(1) as f32,
+            depth_far,
+            0.05,
+        ) * bob
+            * spin
+            * horizon_client::camera::view_matrix(yaw, pitch);
         // Only native mods read it: no matrices or allocation per frame without one.
         let mods_read_camera = !horizon_client::mod_api::mods().is_empty();
         self.native_camera_frame = (mods_read_camera && !title).then(|| {
@@ -18472,6 +18482,7 @@ impl<'a> Game<'a> {
             luminance: Default::default(),
             see_through_vertices: Vec::new(),
             mod_text_overlay: Vec::new(),
+            frame_view_proj: glam::Mat4::IDENTITY,
             shadow_only_vertices: Default::default(),
             entity_spans: Default::default(),
             entity_motion: Default::default(),

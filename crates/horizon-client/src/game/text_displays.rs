@@ -419,9 +419,7 @@ impl Game<'_> {
         let pack = self.pack_ids.is_some();
         self.mod_text_overlay.clear();
         // A pack draws nothing over its own image: see-through text goes on it, projected.
-        let overlay = self.native_camera_frame.as_ref().filter(|_| pack).map(|c| {
-            glam::Mat4::from_cols_array(&c.projection) * glam::Mat4::from_cols_array(&c.view)
-        });
+        let overlay = pack.then_some(self.frame_view_proj);
         // Packs light text as name tags (Complementary's `entity.50112=name_tag`: unlit, bright).
         if !texts.is_empty() {
             self.mark_translucent_entity(normal.len(), "minecraft:name_tag");
