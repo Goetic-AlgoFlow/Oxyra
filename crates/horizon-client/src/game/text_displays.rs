@@ -405,7 +405,8 @@ impl Game<'_> {
 
 impl Game<'_> {
     /// The text native mods draw in the world (`native_world_text`), as the text displays' text:
-    /// lit full bright, `through` over everything.
+    /// lit by the sky, `through` over everything and full bright. A shader pack has no
+    /// see-through pass: there it is drawn with the rest.
     pub(super) fn mod_world_text_geometry(
         &mut self,
         camera: glam::DVec3,
@@ -415,13 +416,15 @@ impl Game<'_> {
     ) {
         let mut texts = Vec::new();
         self.native_world_text(camera, partial as f32, &mut texts);
-        let light = horizon_client::block_entity_render::vertex_light(0xFF);
+        let pack = self.pack_ids.is_some();
         for t in texts.into_iter().filter(|t| t.pose.is_finite() && !t.text.is_empty()) {
+            // Sky light only: a pack tints block light like a torch's.
+            let light = horizon_client::block_entity_render::vertex_light(if t.through { 0xFF } else { 0xF0 });
             let mut batch = HudBatch::new([1, 1]);
             let [a, r, g, b] = t.color.to_be_bytes();
             let color = horizon_client::hud::rgba(r, g, b, a);
             batch.text(&self.gui.atlas, &t.text, 0.0, 0.0, color, t.shadow);
-            let (out, layer) = if t.through {
+            let (out, layer) = if t.through && !pack {
                 (&mut *see_through, 2)
             } else {
                 (&mut *normal, TEXT_POLYGON_OFFSET_OVERLAY)
