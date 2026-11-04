@@ -2015,7 +2015,8 @@ impl UiResources {
                     horizon_client::gfx::panorama::Faces::load(root, defaults)
                 })
             });
-            let mod_image = !horizon_client::mod_api::mods().is_empty();
+            // Native mods (Oxyra FX's sprites) draw from it too: the slot is always there.
+            let mod_image = true;
             let atlas = startup::time("ui.atlas", || {
                 HudAtlas::build_over_with_image(root, defaults, mod_image)
             });
