@@ -417,6 +417,10 @@ impl Game<'_> {
         let mut texts = Vec::new();
         self.native_world_text(camera, partial as f32, &mut texts);
         let pack = self.pack_ids.is_some();
+        // Packs light text as name tags (Complementary's `entity.50112=name_tag`: unlit, bright).
+        if !texts.is_empty() {
+            self.mark_translucent_entity(normal.len(), "minecraft:name_tag");
+        }
         for t in texts.into_iter().filter(|t| t.pose.is_finite() && !t.text.is_empty()) {
             // Sky light only: a pack tints block light like a torch's.
             let light = horizon_client::block_entity_render::vertex_light(if t.through { 0xFF } else { 0xF0 });
